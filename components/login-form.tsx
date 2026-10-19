@@ -38,7 +38,7 @@ export function LoginForm({ accessDenied }: { accessDenied?: "consultant" | "san
   return <main className="login-page">
     <div className="login-glow" />
     <div className="login-shell">
-      <div className="login-brand"><Image src="/trabad-logo.png" alt="Trabad Immobilier" width={156} height={43} priority /><span>TRABAD COMMERCIAL</span></div>
+      <div className="login-brand"><Image src="/icon-192.png" alt="" width={56} height={56} priority /><span>TRABAD<br />COMMERCIAL</span></div>
       <p className="eyebrow light">VOTRE ESPACE COMMERCIAL</p>
       <h1>Le terrain, <em>simplement.</em></h1>
       <p className="login-intro">Chaque prospect, chaque rendez-vous, chaque action. Tout au même endroit.</p>
