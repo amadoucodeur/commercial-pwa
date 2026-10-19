@@ -29,7 +29,7 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .topbar { position: sticky; top: 0; z-index: 20; background: #ffffffed; border-bottom: 1px solid #e8edf5; backdrop-filter: blur(16px); }
 .topbar-inner { max-width: 760px; height: 67px; padding: 0 20px; margin: auto; display: flex; align-items: center; justify-content: space-between; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand img { display: block; width: 38px; height: 38px; border-radius: 10px; }
+.brand img { display: block; width: 38px; height: 38px; border: 1px solid #e2e5ea; border-radius: 10px; box-shadow: 0 3px 9px #13284413; }
 .brand span { color: var(--ink); font-size: 14px; font-weight: 800; letter-spacing: -.02em; }
 .icon-button { width: 42px; height: 42px; border: 0; border-radius: 13px; display: inline-grid; place-items: center; color: #63768f; background: transparent; }
 .icon-button:hover { background: #eff3fa; }
@@ -341,7 +341,7 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .login-glow { position: absolute; top: -140px; left: -180px; width: 440px; height: 440px; border: 1px solid #ffffff20; border-radius: 50%; box-shadow: 0 0 0 65px #ffffff07, 0 0 0 130px #ffffff06; }
 .login-shell { position: relative; width: min(100%, 420px); }
 .login-brand { display: inline-flex; align-items: center; gap: 13px; margin-bottom: 35px; }
-.login-brand img { display: block; width: 56px; height: 56px; border-radius: 14px; }
+.login-brand img { display: block; width: 56px; height: 56px; border: 1px solid #ffffff75; border-radius: 14px; box-shadow: 0 10px 24px #07172e54; }
 .login-brand span { color: #eef3ff; font-size: 11px; font-weight: 800; line-height: 1.4; letter-spacing: .15em; }
 .login-shell h1 { margin: 0 0 13px; font-size: clamp(36px, 9vw, 48px); line-height: 1.1; }
 .login-shell h1 em { display: block; color: #c3b9ff; font-style: normal; }
@@ -358,17 +358,22 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .login-foot { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 18px 0 0; color: #a8bddc; font-size: 11px; }
 
 .install-app { position: fixed; z-index: 35; left: 16px; bottom: calc(100px + env(safe-area-inset-bottom)); width: max-content; max-width: calc(100vw - 32px); }
-.install-app.expanded { width: min(350px, calc(100vw - 32px)); padding: 17px; border: 1px solid #e4e9f1; border-radius: 20px; background: #fff; box-shadow: 0 18px 50px #142d5252; }
-.install-compact { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 15px; border: 1px solid #dce5f0; border-radius: 999px; background: #fff; color: var(--blue); box-shadow: 0 7px 20px #142d5226; font-size: 12px; font-weight: 800; }
-.install-close { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 9px; background: #f1f4f8; color: #6a7890; }
+.install-app.expanded { width: min(350px, calc(100vw - 32px)); padding: 19px; overflow: hidden; border: 1px solid #ffffff29; border-radius: 21px; background: linear-gradient(145deg, #27364c, #152239 78%); color: #fff; box-shadow: 0 20px 50px #101b32a8, inset 0 1px #ffffff26; animation: install-arrive .25s ease-out; }
+.install-app.expanded::before { content: ""; position: absolute; width: 160px; height: 160px; top: -90px; right: -45px; border-radius: 50%; background: #ffffff0d; pointer-events: none; }
+.install-compact { display: inline-flex; align-items: center; gap: 8px; min-height: 43px; padding: 0 16px; border: 1px solid #ffffff35; border-radius: 999px; background: linear-gradient(135deg, #344158, #19263d); color: #fff; box-shadow: 0 9px 24px #14233855; font-size: 12px; font-weight: 800; transition: transform .2s, box-shadow .2s; }
+.install-compact:hover { transform: translateY(-2px); box-shadow: 0 13px 27px #14233866; }
+.install-close { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 9px; background: #ffffff16; color: #e5ecf6; }
 .install-heading { display: flex; align-items: center; gap: 11px; padding-right: 25px; }
-.install-heading img { border-radius: 11px; }
+.install-heading img { border: 1px solid #ffffff80; border-radius: 11px; box-shadow: 0 5px 14px #050d1d55; }
 .install-heading div { display: grid; gap: 3px; }
 .install-heading strong { font-size: 14px; }
-.install-heading span { color: var(--muted); font-size: 11px; }
-.install-help { display: block; margin: 12px 0 14px; color: #64758d; font-size: 12px; line-height: 1.5; }
+.install-heading span { color: #bfcbdc; font-size: 11px; }
+.install-help { display: block; margin: 14px 0 16px; color: #d2dbea; font-size: 12px; line-height: 1.5; }
 .install-help svg { display: inline; vertical-align: -3px; }
-.install-action { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 42px; border: 0; border-radius: 11px; background: var(--navy); color: #fff; font-size: 12px; font-weight: 800; }
+.install-action { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 43px; border: 0; border-radius: 11px; background: #fff; color: #1c2b43; box-shadow: 0 4px 10px #08122240; font-size: 12px; font-weight: 800; transition: background .2s, transform .2s; }
+.install-action:hover { background: #edf2f8; transform: translateY(-1px); }
+@keyframes install-arrive { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .install-app.expanded { animation: none; } .install-compact, .install-action { transition: none; } }
 
 .service-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .service-choices label { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #dce4ed; border-radius: 11px; padding: 9px 11px; background: #fff; font-size: 12px; }
