@@ -534,3 +534,10 @@ h1, h2, h3 { letter-spacing: -.035em; }
   .dossier-card, .manager-link, .new-cta, .fab { transition: transform .15s ease, box-shadow .15s ease; }
   .new-cta:hover, .fab:hover { transform: translateY(-2px); }
 }
+
+.topbar-actions { display: flex; align-items: center; gap: 6px; }
+.sync-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: #eaf1ff; color: #1d4ea8; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.sync-chip.offline { background: #fff1e3; color: #a24f06; }
+.account-status span.offline { color: #a24f06; }
+.pending-action { display: inline-flex; align-items: center; gap: 6px; color: #a24f06; font-size: 13px; font-weight: 600; }
+.logout:disabled { opacity: .5; cursor: not-allowed; }

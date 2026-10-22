@@ -6,5 +6,5 @@ import { SessionProvider } from "next-auth/react";
 export default async function Home() {
   const session = await auth();
   if (!session?.accessToken) redirect("/connexion");
-  return <SessionProvider refetchInterval={5 * 60}><TerrainApp initialSession={session} /></SessionProvider>;
+  return <SessionProvider refetchInterval={5 * 60} refetchWhenOffline={false}><TerrainApp initialSession={session} /></SessionProvider>;
 }
