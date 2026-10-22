@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "app.vercel.trabadcommercial.twa",
+    "sha256_cert_fingerprints": ["78:D3:60:5D:D5:EB:50:DD:2C:BD:1C:6D:E4:98:87:FC:64:2B:67:5E:F9:66:85:C0:99:79:75:74:FF:D7:FA:67"]
+  }
+}]
