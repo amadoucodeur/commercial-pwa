@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  ArrowLeft, ArrowRight, ArrowRightLeft, CalendarDays, Check,
-  Download, Filter, RefreshCw, Search, Target, TrendingUp, UserCheck, UserX, Users, X,
+  ArrowLeft, ArrowRight, ArrowRightLeft, Check,
+  Download, Filter, RefreshCw, Search, UserCheck, UserX, Users, X,
 } from "lucide-react";
 import { motifsDesactivation, motifsPour, motifsTransfert, services, sources, type Localite } from "../lib/crm";
+import { CommercialDashboard } from "./commercial-dashboard";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
 
@@ -274,8 +275,6 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   }, [chargerProspects, refreshKey, mode, filters.recherche]);
 
   const noms = useMemo(() => new Map(agents.map((agent) => [agent.user_id, agent.nom])), [agents]);
-  const somme = (key: keyof Pick<Agent, "portefeuille" | "nouveaux" | "gagnes" | "actions_en_retard">) =>
-    agents.reduce((totalValue, agent) => totalValue + Number(agent[key]), 0);
   const agentsVisibles = agents.filter((agent) =>
     agent.nom.toLocaleLowerCase("fr-FR").includes(rechercheAgent.toLocaleLowerCase("fr-FR")) &&
     (statutAgent === "tous" || agentActif(agent) === (statutAgent === "actifs")) &&
@@ -523,12 +522,8 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
 
     {mode === "performance" && <>
       <div className="manager-period"><label>Du<input type="date" value={debutPerformance} max={finPerformance} onChange={(event) => setDebutPerformance(event.target.value)} /></label><label>Au<input type="date" value={finPerformance} min={debutPerformance} onChange={(event) => setFinPerformance(event.target.value)} /></label><button onClick={() => void chargerPerformance()} aria-label="Actualiser les performances" disabled={performanceBusy}><RefreshCw size={18} /></button></div>
-      <div className="manager-stats">
-        <div><span><Users size={18} /></span><strong>{somme("portefeuille")}</strong><small>Dossiers en cours</small></div>
-        <div><span><Target size={18} /></span><strong>{somme("nouveaux")}</strong><small>Nouveaux</small></div>
-        <div><span><TrendingUp size={18} /></span><strong>{somme("gagnes")}</strong><small>Gagnés</small></div>
-        <div><span><CalendarDays size={18} /></span><strong>{somme("actions_en_retard")}</strong><small>Actions en retard</small></div>
-      </div>
+      <CommercialDashboard client={client} organisationId={organisationId} debut={debutPerformance} fin={finPerformance} refreshKey={refreshKey}
+        agents={[...agents].sort((a, b) => Number(agentActif(b)) - Number(agentActif(a)) || a.nom.localeCompare(b.nom, "fr")).map((agent) => ({ user_id: agent.user_id, nom: agentActif(agent) ? agent.nom : `${agent.nom} (inactif)` }))} />
       {inactifsAvecDossiers.length > 0 && <div className="warning" role="alert"><strong>{inactifsAvecDossiers.length} agent{inactifsAvecDossiers.length > 1 ? "s" : ""} inactif{inactifsAvecDossiers.length > 1 ? "s" : ""} détien{inactifsAvecDossiers.length > 1 ? "nent" : "t"} encore des dossiers :</strong> {inactifsAvecDossiers.map((agent) => `${agent.nom} (${agent.dossiers_total})`).join(", ")}. Transférez-les pour qu’ils continuent d’être suivis.</div>}
       <div className="manager-section-heading"><div><p className="eyebrow">L’ÉQUIPE</p><h2>Performance des agents</h2></div><span>{agentsVisibles.length} profil{agentsVisibles.length > 1 ? "s" : ""}</span></div>
       <div className="manager-controls">

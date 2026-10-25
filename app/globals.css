@@ -580,3 +580,12 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .agent-actions-detail span { padding: 4px 8px; border-radius: 8px; background: #f2f4f7; color: #59677d; font-size: 11px; }
 .agent-actions-detail strong { margin-right: 4px; color: #0d2146; }
 .danger-link { color: #a23c49 !important; }
+
+.my-stats { margin-top: 18px; border: 1px solid var(--line); border-radius: 16px; background: white; }
+.my-stats > summary { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; list-style: none; color: var(--blue); }
+.my-stats > summary::-webkit-details-marker { display: none; }
+.my-stats > summary span { display: grid; flex: 1; gap: 2px; color: #0d2146; }
+.my-stats > summary small { color: #8b9aaf; font-size: 12px; }
+.my-stats[open] > summary svg:last-child { transform: rotate(180deg); }
+.my-stats .cd { padding: 0 12px 14px; }
+.manager-workspace-performance .cd { margin: 6px 0 22px; }

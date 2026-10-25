@@ -14,6 +14,7 @@ import { ProspectForm } from "./prospect-form";
 import { ManagerLocalities } from "./manager-localities";
 import { ManagerWorkspace } from "./manager-workspace";
 import { DesktopDossierTable } from "./desktop-dossier-table";
+import { CommercialDashboard } from "./commercial-dashboard";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
 import { actions, motifsPour, services, sources, type Contact, type Localite, type ProspectPayload } from "../lib/crm";
@@ -587,6 +588,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
           <div className="section-heading"><div><p className="eyebrow">VOS PRIORITÉS</p><h2>À faire</h2></div><button onClick={() => setVue("agenda")}>Tout voir <ArrowRight size={16} /></button></div>
           {[...retard, ...duJour, ...prochaines].slice(0, 3).map(carteTache)}
           {taches.length === 0 && <div className="empty"><CalendarDays size={26} /><strong>Programme à jour</strong><p>Vos prochaines actions apparaîtront ici.</p></div>}
+          {!manager && profilActif && enLigne && <details className="my-stats"><summary><TrendingUp size={18} /><span><strong>Mes indicateurs</strong><small>30 derniers jours : dossiers, actions, conversion</small></span><ChevronDown size={18} /></summary><CommercialDashboard client={client} organisationId={session.user.organisationId} debut={day(new Date(Date.now() - 29 * 86400000).toISOString())} fin={aujourdHui} equipe={false} /></details>}
         </>}
         {vue === "dossiers" && <>
           {manager && <div className="dossier-mode-switch" role="group" aria-label="Mode des dossiers"><button type="button" className={!gestionAvancee ? "active" : ""} aria-pressed={!gestionAvancee} onClick={() => setGestionAvancee(false)}>Vue rapide</button><button type="button" className={gestionAvancee ? "active" : ""} aria-pressed={gestionAvancee} onClick={() => { setAgentGestion(""); setGestionAvancee(true); }}>Gestion avancée</button></div>}
