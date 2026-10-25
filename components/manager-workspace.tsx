@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  ArrowLeft, ArrowRight, CalendarDays, Check,
-  Download, Filter, RefreshCw, Search, Target, TrendingUp, Users, X,
+  ArrowLeft, ArrowRight, ArrowRightLeft, CalendarDays, Check,
+  Download, Filter, RefreshCw, Search, Target, TrendingUp, UserCheck, UserX, Users, X,
 } from "lucide-react";
-import { services, sources, type Localite } from "../lib/crm";
+import { motifsDesactivation, motifsPour, motifsTransfert, services, sources, type Localite } from "../lib/crm";
+import { DossierHistory } from "./dossier-history";
+import { MotifField, lireMotif } from "./motif-field";
 
 type Agent = {
   user_id: string;
@@ -18,10 +20,26 @@ type Agent = {
   perdus: number;
   actions_terminees: number;
   actions_en_retard: number;
+  // Complété par crm_equipe_details (statut commercial et détail des échanges de la période).
+  profil_actif?: boolean;
+  desactive_at?: string | null;
+  desactivation_motif?: string | null;
+  dossiers_total?: number;
+  appels?: number;
+  visites?: number;
+  rendez_vous?: number;
+  messages?: number;
+  notes?: number;
 };
+type Detail = Required<Pick<Agent, "user_id" | "profil_actif" | "desactive_at" | "desactivation_motif" | "dossiers_total" | "appels" | "visites" | "rendez_vous" | "messages" | "notes">>;
+const typesActions = [["appels", "Appels"], ["visites", "Visites"], ["rendez_vous", "Rendez-vous"], ["messages", "Messages"], ["notes", "Notes"]] as const;
+const actionsFaites = (agent: Agent) => agent.appels === undefined ? Number(agent.actions_terminees)
+  : typesActions.reduce((total, [key]) => total + Number(agent[key] ?? 0), 0);
+const agentActif = (agent: Agent) => agent.actif && agent.profil_actif !== false;
 const comparerPerformance = (left: Agent, right: Agent) =>
+  Number(agentActif(right)) - Number(agentActif(left)) ||
   Number(right.gagnes) - Number(left.gagnes) ||
-  Number(right.actions_terminees) - Number(left.actions_terminees) ||
+  actionsFaites(right) - actionsFaites(left) ||
   Number(right.nouveaux) - Number(left.nouveaux) ||
   Number(left.actions_en_retard) - Number(right.actions_en_retard) ||
   Number(left.perdus) - Number(right.perdus) ||
@@ -29,7 +47,6 @@ const comparerPerformance = (left: Agent, right: Agent) =>
   left.nom.localeCompare(right.nom, "fr");
 type Profil = { user_id: string; zone: string | null };
 type Eligible = { user_id: string; nom: string; actif: boolean; profil_existant: boolean };
-type Activity = { id: string; type_activite: string; resultat: string | null; notes: string | null; decision: string | null; etape_classee: string | null; effectuee_at: string };
 
 type Prospect = {
   id: string;
@@ -75,7 +92,7 @@ const etapes = [
 ] as const;
 const temperatures = [["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]] as const;
 const sourceChoices = [["manuel", "Saisie manuelle"], ...sources] as const;
-const teamColumns = [["agent", "Agent"], ["statut", "Statut"], ["zone", "Zone"], ["portefeuille", "Portefeuille"], ["nouveaux", "Nouveaux"], ["gagnes", "Gagnés"], ["perdus", "Perdus"], ["actions", "Actions faites"], ["retards", "Retards"]] as const;
+const teamColumns = [["agent", "Agent"], ["statut", "Statut"], ["zone", "Zone"], ["portefeuille", "Portefeuille"], ["nouveaux", "Nouveaux"], ["gagnes", "Gagnés"], ["perdus", "Perdus"], ["actions", "Actions faites"], ["appels", "Appels"], ["visites", "Visites"], ["rendez_vous", "Rendez-vous"], ["messages", "Messages"], ["notes", "Notes"], ["retards", "Retards"]] as const;
 const dossierColumns = [["contact", "Contact"], ["services", "Services"], ["agent", "Agent"], ["source", "Source"], ["etape", "Étape"], ["date", "Date"]] as const;
 type TeamColumn = typeof teamColumns[number][0];
 type DossierColumn = typeof dossierColumns[number][0];
@@ -119,7 +136,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   localites: Localite[];
   mode: "performance" | "prospects";
   initialAgent?: string;
-  agentsDisponibles?: { user_id: string; nom: string; actif: boolean }[];
+  agentsDisponibles?: { user_id: string; nom: string; actif: boolean; profil_existant?: boolean }[];
 }) {
   const [debutPerformance, setDebutPerformance] = useState(monthAgo);
   const [finPerformance, setFinPerformance] = useState(today);
@@ -139,7 +156,11 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selected, setSelected] = useState<Prospect | null>(null);
-  const [activities, setActivities] = useState<Activity[]>([]);
+  const [selectionIds, setSelectionIds] = useState<Set<string>>(new Set());
+  const [tousLesResultats, setTousLesResultats] = useState(false);
+  const [transfertOuvert, setTransfertOuvert] = useState(false);
+  const [gestionAgent, setGestionAgent] = useState<{ agent: Agent; mode: "desactiver" | "transferer" } | null>(null);
+  const [etapeEdition, setEtapeEdition] = useState("");
   const [editing, setEditing] = useState<Prospect | null>(null);
   const [rechercheAgent, setRechercheAgent] = useState("");
   const [statutAgent, setStatutAgent] = useState("tous");
@@ -173,12 +194,19 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
     const request = ++performanceRequest.current;
     setPerformanceBusy(true);
     try {
-      const { data, error } = await client.rpc("crm_performance_equipe", {
-        p_organisation_id: organisationId, p_debut: debutPerformance, p_fin: finPerformance,
-      });
+      const periode = { p_organisation_id: organisationId, p_debut: debutPerformance, p_fin: finPerformance };
+      const [{ data, error }, details] = await Promise.all([
+        client.rpc("crm_performance_equipe", periode),
+        client.rpc("crm_equipe_details", periode),
+      ]);
       if (request !== performanceRequest.current) return;
       if (error) { setPerformanceError(true); setMessage(`Performance indisponible : ${error.message}`); }
-      else { setPerformanceError(false); setAgents((data ?? []) as Agent[]); }
+      else {
+        // Sans le détail (base pas encore migrée), le tableau garde les totaux d'origine.
+        const parAgent = new Map(((details.error ? [] : details.data ?? []) as Detail[]).map((detail) => [detail.user_id, detail]));
+        setPerformanceError(false);
+        setAgents(((data ?? []) as Agent[]).map((agent) => ({ ...agent, ...parAgent.get(agent.user_id) })));
+      }
     } catch {
       if (request === performanceRequest.current) { setPerformanceError(true); setMessage("Performance indisponible. Vérifiez votre connexion."); }
     } finally {
@@ -234,23 +262,11 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   }, [agentsDisponibles, mode]);
   useEffect(() => { if (mode === "performance") void chargerEquipe(); }, [chargerEquipe, mode, refreshKey]);
   useEffect(() => {
-    if (!selected) { setActivities([]); return; }
-    let active = true;
-    void Promise.resolve(client.from("crm_activites").select("id,type_activite,resultat,notes,decision,etape_classee,effectuee_at")
-      .eq("opportunite_id", selected.id).order("effectuee_at", { ascending: false }).limit(50))
-      .then(({ data, error }) => {
-        if (!active) return;
-        if (error) setMessage(`Historique indisponible : ${error.message}`);
-        else setActivities((data ?? []) as Activity[]);
-      }).catch(() => { if (active) setMessage("Historique indisponible. Vérifiez votre connexion."); });
-    return () => { active = false; };
-  }, [client, selected?.id]);
-  useEffect(() => {
-    if (!selected && !editing && !profilEdit) return;
+    if (!selected && !editing && !profilEdit && !transfertOuvert && !gestionAgent) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
-  }, [selected, editing, profilEdit]);
+  }, [selected, editing, profilEdit, transfertOuvert, gestionAgent]);
   useEffect(() => {
     if (mode !== "prospects") return;
     const timer = window.setTimeout(() => { void chargerProspects(); }, filters.recherche ? 250 : 0);
@@ -262,16 +278,23 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
     agents.reduce((totalValue, agent) => totalValue + Number(agent[key]), 0);
   const agentsVisibles = agents.filter((agent) =>
     agent.nom.toLocaleLowerCase("fr-FR").includes(rechercheAgent.toLocaleLowerCase("fr-FR")) &&
-    (statutAgent === "tous" || agent.actif === (statutAgent === "actifs")) &&
+    (statutAgent === "tous" || agentActif(agent) === (statutAgent === "actifs")) &&
     (profils.find((profil) => profil.user_id === agent.user_id)?.zone ?? "")
       .toLocaleLowerCase("fr-FR").includes(zoneAgent.toLocaleLowerCase("fr-FR")))
     .sort(comparerPerformance);
 
+  // Agents qui peuvent recevoir des dossiers : actifs côté compte et côté commercial, avec un profil.
+  const repreneurs = (agentsDisponibles.length ? agentsDisponibles : agents)
+    .filter((agent) => agent.actif && ("profil_existant" in agent ? agent.profil_existant !== false : agentActif(agent as Agent)));
+  const inactifsAvecDossiers = agents.filter((agent) => !agentActif(agent) && Number(agent.dossiers_total ?? 0) > 0);
+  const statutLibelle = (agent: Agent) => agentActif(agent) ? "Actif"
+    : `Inactif${agent.desactive_at ? ` depuis le ${dateLabel(agent.desactive_at)}` : ""}`;
+
   function exporterAgents() {
     const lines = [
-      ["Agent", "Compte actif", "Zone", "Portefeuille", "Nouveaux", "Gagnés", "Perdus", "Actions terminées", "Actions en retard"],
-      ...agentsVisibles.map((agent) => [agent.nom, agent.actif ? "Oui" : "Non", profils.find((profil) => profil.user_id === agent.user_id)?.zone ?? "", agent.portefeuille,
-        agent.nouveaux, agent.gagnes, agent.perdus, agent.actions_terminees, agent.actions_en_retard]),
+      ["Agent", "Statut", "Zone", "Portefeuille", "Nouveaux", "Gagnés", "Perdus", "Actions faites", ...typesActions.map(([, title]) => title), "Actions en retard"],
+      ...agentsVisibles.map((agent) => [agent.nom, statutLibelle(agent), profils.find((profil) => profil.user_id === agent.user_id)?.zone ?? "", agent.portefeuille,
+        agent.nouveaux, agent.gagnes, agent.perdus, actionsFaites(agent), ...typesActions.map(([key]) => agent[key] ?? ""), agent.actions_en_retard]),
     ];
     const url = URL.createObjectURL(new Blob([`\ufeff${lines.map((line) => line.map(csvCell).join(";")).join("\r\n")}`], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
@@ -284,6 +307,93 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   function changerFiltre(key: keyof Filters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
     setPage(0);
+    setSelectionIds(new Set());
+    setTousLesResultats(false);
+  }
+
+  function basculerSelection(id: string) {
+    setTousLesResultats(false);
+    setSelectionIds((courante) => {
+      const suivante = new Set(courante);
+      if (suivante.has(id)) suivante.delete(id); else suivante.add(id);
+      return suivante;
+    });
+  }
+  const pageEntiere = rows.length > 0 && rows.every((row) => selectionIds.has(row.id));
+  function basculerPage() {
+    setTousLesResultats(false);
+    setSelectionIds((courante) => {
+      const suivante = new Set(courante);
+      rows.forEach((row) => { if (pageEntiere) suivante.delete(row.id); else suivante.add(row.id); });
+      return suivante;
+    });
+  }
+  const nombreSelectionnes = tousLesResultats ? total : selectionIds.size;
+
+  async function idsFiltres() {
+    const ids: string[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const { data, error } = await client.rpc("crm_lister_dossiers_equipe", { ...requestArgs, p_limit: 500, p_offset: offset });
+      if (error) throw error;
+      const batch = (data ?? []) as Prospect[];
+      ids.push(...batch.map((row) => row.id));
+      if (batch.length < 500) break;
+    }
+    return ids;
+  }
+
+  async function transfererSelection(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setMessage("");
+    try {
+      const ids = tousLesResultats ? await idsFiltres() : [...selectionIds];
+      const { data, error } = await client.rpc("crm_transferer_dossiers", {
+        p_ids: ids, p_owner_id: String(form.get("owner_id")), p_motif: lireMotif(form),
+      });
+      if (error) throw error;
+      const nombre = Number(data ?? 0);
+      setTransfertOuvert(false);
+      setSelectionIds(new Set());
+      setTousLesResultats(false);
+      setMessage(`${nombre} dossier${nombre > 1 ? "s" : ""} transféré${nombre > 1 ? "s" : ""} à ${noms.get(String(form.get("owner_id"))) ?? "l’agent choisi"}.`);
+      await chargerProspects();
+      onTeamChanged();
+    } catch (error) {
+      setMessage(error && typeof error === "object" && "message" in error ? String(error.message) : "Transfert impossible.");
+    } finally { setSaving(false); }
+  }
+
+  async function gererAgent(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!gestionAgent) return;
+    const form = new FormData(event.currentTarget);
+    const repreneur = String(form.get("repreneur") || "") || null;
+    setSaving(true);
+    setMessage("");
+    try {
+      const { data, error } = gestionAgent.mode === "desactiver"
+        ? await client.rpc("crm_desactiver_agent", { p_user_id: gestionAgent.agent.user_id, p_repreneur: repreneur, p_motif: lireMotif(form) })
+        : await client.rpc("crm_transferer_portefeuille", { p_ancien: gestionAgent.agent.user_id, p_nouveau: repreneur, p_motif: lireMotif(form) });
+      if (error) throw error;
+      const nombre = Number(data ?? 0);
+      setMessage(gestionAgent.mode === "desactiver"
+        ? `${gestionAgent.agent.nom} est désormais inactif.${repreneur ? ` ${nombre} dossier${nombre > 1 ? "s" : ""} transféré${nombre > 1 ? "s" : ""} à ${noms.get(repreneur) ?? "l’agent choisi"}.` : " Ses dossiers restent à transférer."}`
+        : `${nombre} dossier${nombre > 1 ? "s" : ""} transféré${nombre > 1 ? "s" : ""} à ${noms.get(repreneur ?? "") ?? "l’agent choisi"}.`);
+      setGestionAgent(null);
+      onTeamChanged();
+    } catch (error) {
+      setMessage(error && typeof error === "object" && "message" in error ? String(error.message) : "Opération impossible.");
+    } finally { setSaving(false); }
+  }
+
+  async function reactiverAgent(agent: Agent) {
+    setMessage("");
+    const { error } = await client.rpc("crm_reactiver_agent", { p_user_id: agent.user_id });
+    if (error) { setMessage(error.message); return; }
+    setMessage(`${agent.nom} est de nouveau actif.`);
+    onTeamChanged();
   }
 
   async function ouvrirEdition(row: Prospect) {
@@ -297,6 +407,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
       return;
     }
     setSelected(null);
+    setEtapeEdition(row.etape);
     setEditing({ ...row, ...dossierResult.data, ...contactResult.data });
   }
 
@@ -346,10 +457,13 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
     const form = new FormData(event.currentTarget);
     const chosenServices = form.getAll("services").map(String);
     if (!chosenServices.length) { setMessage("Choisissez au moins un service."); return; }
+    const motif = editing.etape !== String(form.get("etape")) && motifsPour(String(form.get("etape"))) ? lireMotif(form) : null;
     setSaving(true);
     setMessage("");
     try {
-      const { error } = await client.rpc("crm_modifier_dossier_complet", {
+      // La variante avec motif n'est utilisée que si une raison est exigée.
+      const { error } = await client.rpc(motif ? "crm_modifier_dossier_motif" : "crm_modifier_dossier_complet", {
+        ...(motif ? { p_motif: motif } : {}),
         p_id: editing.id, p_nom: String(form.get("nom") || ""),
         p_telephone: String(form.get("telephone") || ""),
         p_localisation: String(form.get("localisation") || ""),
@@ -396,6 +510,12 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
     } finally { setSaving(false); }
   }
 
+  function actionsAgent(agent: Agent) {
+    if (agent.profil_actif === undefined) return null;
+    if (agentActif(agent)) return <button type="button" className="danger-link" onClick={() => { setMessage(""); setGestionAgent({ agent, mode: "desactiver" }); }}><UserX size={14} /> Désactiver</button>;
+    return <>{Number(agent.dossiers_total ?? 0) > 0 && <button type="button" onClick={() => { setMessage(""); setGestionAgent({ agent, mode: "transferer" }); }}><ArrowRightLeft size={14} /> Transférer</button>}{agent.actif && <button type="button" onClick={() => void reactiverAgent(agent)}><UserCheck size={14} /> Réactiver</button>}</>;
+  }
+
   return <div className={`manager-workspace manager-workspace-${mode}`}>
     {mode === "performance" && <div className="page-title"><p className="eyebrow">ESPACE RESPONSABLE</p><h1>Performance commerciale</h1><p>Suivez les résultats de votre équipe sur la période choisie.</p></div>}
     {!performanceBusy && !performanceError && agents.filter((agent) => agent.actif).length === 0 && <div className="warning" role="alert">Aucun agent commercial actif n’est configuré. Ajoutez au moins un compte avec le droit Commercial et son profil depuis Loc Manager pour démarrer le suivi.</div>}
@@ -409,6 +529,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
         <div><span><TrendingUp size={18} /></span><strong>{somme("gagnes")}</strong><small>Gagnés</small></div>
         <div><span><CalendarDays size={18} /></span><strong>{somme("actions_en_retard")}</strong><small>Actions en retard</small></div>
       </div>
+      {inactifsAvecDossiers.length > 0 && <div className="warning" role="alert"><strong>{inactifsAvecDossiers.length} agent{inactifsAvecDossiers.length > 1 ? "s" : ""} inactif{inactifsAvecDossiers.length > 1 ? "s" : ""} détien{inactifsAvecDossiers.length > 1 ? "nent" : "t"} encore des dossiers :</strong> {inactifsAvecDossiers.map((agent) => `${agent.nom} (${agent.dossiers_total})`).join(", ")}. Transférez-les pour qu’ils continuent d’être suivis.</div>}
       <div className="manager-section-heading"><div><p className="eyebrow">L’ÉQUIPE</p><h2>Performance des agents</h2></div><span>{agentsVisibles.length} profil{agentsVisibles.length > 1 ? "s" : ""}</span></div>
       <div className="manager-controls">
         <details className="manager-filters"><summary className="manager-filter-title"><Filter size={15} /> Filtres {Number(!!rechercheAgent) + Number(statutAgent !== "tous") + Number(!!zoneAgent) > 0 && "actifs"}</summary><div className="manager-filter-grid"><label>Rechercher un agent<input value={rechercheAgent} onChange={(event) => setRechercheAgent(event.target.value)} placeholder="Nom de l’agent" /></label><label>Statut<select value={statutAgent} onChange={(event) => setStatutAgent(event.target.value)}><option value="tous">Tous</option><option value="actifs">Actifs</option><option value="inactifs">Inactifs</option></select></label><label>Zone<input value={zoneAgent} onChange={(event) => setZoneAgent(event.target.value)} placeholder="Ex. Cocody" /></label></div></details>
@@ -417,9 +538,9 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
       <div className="manager-filter-actions"><button className="export-button" onClick={exporterAgents}><Download size={15} /> Exporter l’équipe</button><button className="export-button" onClick={() => setProfilEdit("nouveau")}>Ajouter un agent</button></div>
       {performanceBusy && <p className="manager-muted">Actualisation des performances…</p>}
       {!performanceBusy && !performanceError && agents.length === 0 && <div className="empty"><Users size={26} /><strong>Aucun agent</strong><p>Créez les profils commerciaux depuis Loc Manager.</p></div>}
-      <div className="manager-table-wrap"><table className="manager-table" style={{ minWidth: Math.max(360, visibleTeamColumns.length * 125 + 110) }}><thead><tr>{visibleTeamColumns.includes("agent") && <th>Agent</th>}{visibleTeamColumns.includes("statut") && <th>Statut</th>}{visibleTeamColumns.includes("zone") && <th>Zone</th>}{visibleTeamColumns.includes("portefeuille") && <th>Portefeuille</th>}{visibleTeamColumns.includes("nouveaux") && <th>Nouveaux</th>}{visibleTeamColumns.includes("gagnes") && <th>Gagnés</th>}{visibleTeamColumns.includes("perdus") && <th>Perdus</th>}{visibleTeamColumns.includes("actions") && <th>Actions faites</th>}{visibleTeamColumns.includes("retards") && <th>Retards</th>}<th>Actions</th></tr></thead><tbody>{agentsVisibles.map((agent) => <tr key={agent.user_id}>{visibleTeamColumns.includes("agent") && <td><strong>{agent.nom}</strong></td>}{visibleTeamColumns.includes("statut") && <td>{agent.actif ? "Actif" : "Inactif"}</td>}{visibleTeamColumns.includes("zone") && <td>{profils.find((profil) => profil.user_id === agent.user_id)?.zone || "—"}</td>}{visibleTeamColumns.includes("portefeuille") && <td>{agent.portefeuille}</td>}{visibleTeamColumns.includes("nouveaux") && <td>{agent.nouveaux}</td>}{visibleTeamColumns.includes("gagnes") && <td>{agent.gagnes}</td>}{visibleTeamColumns.includes("perdus") && <td>{agent.perdus}</td>}{visibleTeamColumns.includes("actions") && <td>{agent.actions_terminees}</td>}{visibleTeamColumns.includes("retards") && <td>{agent.actions_en_retard}</td>}<td>{onOpenAgentDossiers && <button onClick={() => onOpenAgentDossiers(agent.user_id)}>Dossiers</button>}<button onClick={() => setProfilEdit(profils.find((profil) => profil.user_id === agent.user_id) ?? { user_id: agent.user_id, zone: null })}>Modifier</button></td></tr>)}</tbody></table></div>
-      <div className="agent-list">{agentsVisibles.map((agent) => <article className="agent-card" key={agent.user_id}><div className="agent-head"><span className="agent-avatar">{agent.nom.slice(0, 1).toUpperCase()}</span><div><strong>{agent.nom}</strong><small>{profils.find((profil) => profil.user_id === agent.user_id)?.zone || "Zone non renseignée"}</small></div><span className={`agent-status ${agent.actif ? "active" : ""}`}>{agent.actif ? "Actif" : "Inactif"}</span></div><div className="agent-metrics"><span><strong>{agent.portefeuille}</strong>Dossiers</span><span><strong>{agent.nouveaux}</strong>Nouveaux</span><span><strong>{agent.gagnes}</strong>Gagnés</span><span><strong>{agent.perdus}</strong>Perdus</span><span><strong>{agent.actions_terminees}</strong>Actions</span><span className="late"><strong>{agent.actions_en_retard}</strong>Retards</span></div><div className="agent-card-actions">{onOpenAgentDossiers && <button type="button" onClick={() => onOpenAgentDossiers(agent.user_id)}>Voir les dossiers</button>}<button type="button" onClick={() => setProfilEdit(profils.find((profil) => profil.user_id === agent.user_id) ?? { user_id: agent.user_id, zone: null })}>Modifier l’agent</button></div></article>)}</div>
-      <p className="manager-footnote">Classement : gagnés, actions terminées et nouveaux dossiers décroissants, puis moins de retards et de pertes. Les nouveaux, gagnés, perdus et actions terminées suivent la période choisie. Le portefeuille et les retards reflètent l’état actuel. Les dossiers réattribués comptent pour leur agent actuel.</p>
+      <div className="manager-table-wrap"><table className="manager-table" style={{ minWidth: Math.max(360, visibleTeamColumns.length * 125 + 110) }}><thead><tr>{visibleTeamColumns.includes("agent") && <th>Agent</th>}{visibleTeamColumns.includes("statut") && <th>Statut</th>}{visibleTeamColumns.includes("zone") && <th>Zone</th>}{visibleTeamColumns.includes("portefeuille") && <th>Portefeuille</th>}{visibleTeamColumns.includes("nouveaux") && <th>Nouveaux</th>}{visibleTeamColumns.includes("gagnes") && <th>Gagnés</th>}{visibleTeamColumns.includes("perdus") && <th>Perdus</th>}{visibleTeamColumns.includes("actions") && <th>Actions faites</th>}{typesActions.map(([key, title]) => visibleTeamColumns.includes(key) && <th key={key}>{title}</th>)}{visibleTeamColumns.includes("retards") && <th>Retards</th>}<th>Actions</th></tr></thead><tbody>{agentsVisibles.map((agent) => <tr key={agent.user_id}>{visibleTeamColumns.includes("agent") && <td><strong>{agent.nom}</strong></td>}{visibleTeamColumns.includes("statut") && <td><span className={`agent-status ${agentActif(agent) ? "active" : ""}`}>{statutLibelle(agent)}</span>{!agentActif(agent) && agent.desactivation_motif && <small>{agent.desactivation_motif}</small>}{!agentActif(agent) && Number(agent.dossiers_total ?? 0) > 0 && <small className="late">{agent.dossiers_total} dossier{Number(agent.dossiers_total) > 1 ? "s" : ""} à transférer</small>}</td>}{visibleTeamColumns.includes("zone") && <td>{profils.find((profil) => profil.user_id === agent.user_id)?.zone || "—"}</td>}{visibleTeamColumns.includes("portefeuille") && <td>{agent.portefeuille}</td>}{visibleTeamColumns.includes("nouveaux") && <td>{agent.nouveaux}</td>}{visibleTeamColumns.includes("gagnes") && <td>{agent.gagnes}</td>}{visibleTeamColumns.includes("perdus") && <td>{agent.perdus}</td>}{visibleTeamColumns.includes("actions") && <td><strong>{actionsFaites(agent)}</strong></td>}{typesActions.map(([key]) => visibleTeamColumns.includes(key) && <td key={key}>{agent[key] ?? "—"}</td>)}{visibleTeamColumns.includes("retards") && <td>{agent.actions_en_retard}</td>}<td>{onOpenAgentDossiers && <button onClick={() => onOpenAgentDossiers(agent.user_id)}>Dossiers</button>}<button onClick={() => setProfilEdit(profils.find((profil) => profil.user_id === agent.user_id) ?? { user_id: agent.user_id, zone: null })}>Modifier</button>{actionsAgent(agent)}</td></tr>)}</tbody></table></div>
+      <div className="agent-list">{agentsVisibles.map((agent) => <article className="agent-card" key={agent.user_id}><div className="agent-head"><span className="agent-avatar">{agent.nom.slice(0, 1).toUpperCase()}</span><div><strong>{agent.nom}</strong><small>{profils.find((profil) => profil.user_id === agent.user_id)?.zone || "Zone non renseignée"}</small></div><span className={`agent-status ${agentActif(agent) ? "active" : ""}`}>{agentActif(agent) ? "Actif" : "Inactif"}</span></div>{!agentActif(agent) && <p className="agent-inactive-note">{statutLibelle(agent)}{agent.desactivation_motif ? ` · ${agent.desactivation_motif}` : ""}{Number(agent.dossiers_total ?? 0) > 0 ? ` · ${agent.dossiers_total} dossier${Number(agent.dossiers_total) > 1 ? "s" : ""} à transférer` : ""}</p>}<div className="agent-metrics"><span><strong>{agent.portefeuille}</strong>Dossiers</span><span><strong>{agent.nouveaux}</strong>Nouveaux</span><span><strong>{agent.gagnes}</strong>Gagnés</span><span><strong>{agent.perdus}</strong>Perdus</span><span><strong>{actionsFaites(agent)}</strong>Actions</span><span className="late"><strong>{agent.actions_en_retard}</strong>Retards</span></div>{agent.appels !== undefined && <div className="agent-actions-detail" aria-label="Détail des actions faites">{typesActions.map(([key, title]) => <span key={key}><strong>{agent[key]}</strong>{title}</span>)}</div>}<div className="agent-card-actions">{onOpenAgentDossiers && <button type="button" onClick={() => onOpenAgentDossiers(agent.user_id)}>Voir les dossiers</button>}<button type="button" onClick={() => setProfilEdit(profils.find((profil) => profil.user_id === agent.user_id) ?? { user_id: agent.user_id, zone: null })}>Modifier l’agent</button>{actionsAgent(agent)}</div></article>)}</div>
+      <p className="manager-footnote">Classement : gagnés, actions terminées et nouveaux dossiers décroissants, puis moins de retards et de pertes. Les nouveaux, gagnés, perdus et actions faites (appels, visites, rendez-vous, messages, notes enregistrés par l’agent) suivent la période choisie. Le portefeuille et les retards reflètent l’état actuel. Les dossiers réattribués comptent pour leur agent actuel.</p>
     </>}
 
     {mode === "prospects" && <>
@@ -439,10 +560,12 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
         <div className="manager-filter-actions"><button onClick={() => { setFilters({ recherche: "", agent: "", etape: "", source: "", temperature: "", service: "", archive: "", debut: "", fin: "" }); setPage(0); }}>Effacer les filtres</button></div>
       </details><ColumnPicker options={dossierColumns} visible={visibleDossierColumns} onChange={setVisibleDossierColumns} /></div>
       <div className="manager-filter-actions"><button className="export-button" onClick={() => void exporter()} disabled={exporting}><Download size={15} /> {exporting ? "Export…" : "Exporter CSV"}</button></div>
+      {nombreSelectionnes > 0 && <div className="selection-bar" role="region" aria-label="Dossiers sélectionnés"><span><strong>{nombreSelectionnes}</strong> dossier{nombreSelectionnes > 1 ? "s" : ""} sélectionné{nombreSelectionnes > 1 ? "s" : ""}</span>{!tousLesResultats && pageEntiere && total > rows.length && <button type="button" className="selection-all" onClick={() => setTousLesResultats(true)}>Sélectionner les {total} résultats</button>}<div><button type="button" onClick={() => { setSelectionIds(new Set()); setTousLesResultats(false); }}>Effacer</button><button type="button" className="selection-primary" onClick={() => { setMessage(""); setTransfertOuvert(true); }}><ArrowRightLeft size={15} /> Transférer</button></div></div>}
       {listBusy && <p className="manager-muted">Chargement des prospects…</p>}
       {!listBusy && rows.length === 0 && <div className="empty"><Users size={26} /><strong>Aucun prospect trouvé</strong><p>Modifiez les filtres pour élargir la recherche.</p></div>}
-      <div className="manager-table-wrap"><table className="manager-table" style={{ minWidth: Math.max(360, visibleDossierColumns.length * 135 + 110) }}><thead><tr>{visibleDossierColumns.includes("contact") && <th>Contact</th>}{visibleDossierColumns.includes("services") && <th>Services</th>}{visibleDossierColumns.includes("agent") && <th>Agent</th>}{visibleDossierColumns.includes("source") && <th>Source</th>}{visibleDossierColumns.includes("etape") && <th>Étape</th>}{visibleDossierColumns.includes("date") && <th>Date</th>}<th>Actions</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}>{visibleDossierColumns.includes("contact") && <td><strong>{row.nom}</strong><small>{row.telephone || "—"}</small></td>}{visibleDossierColumns.includes("services") && <td>{(row.services ?? [row.service]).map((service) => label(services, service)).join(", ")}</td>}{visibleDossierColumns.includes("agent") && <td>{noms.get(row.owner_id ?? "") ?? "Non attribué"}</td>}{visibleDossierColumns.includes("source") && <td>{label(sourceChoices, row.source)}</td>}{visibleDossierColumns.includes("etape") && <td><span className="stage" data-stage={row.archived_at ? "archive" : row.etape}>{row.archived_at ? "Archivé" : label(etapes, row.etape)}</span></td>}{visibleDossierColumns.includes("date") && <td>{dateLabel(row.created_at)}</td>}<td><button onClick={() => setSelected(row)}>Gérer</button><button onClick={() => void ouvrirEdition(row)}>Modifier</button></td></tr>)}</tbody></table></div>
-      <div className="manager-prospect-list">{rows.map((row) => <article className="manager-prospect-card" key={row.id}><button type="button" className="manager-prospect" onClick={() => setSelected(row)}><span className="avatar">{row.nom.slice(0, 1).toUpperCase()}</span><span className="manager-prospect-main"><strong>{row.nom}</strong><small>{(row.services ?? [row.service]).map((service) => label(services, service)).join(" · ")}</small><small>{noms.get(row.owner_id ?? "") ?? "Non attribué"} · {row.telephone || "Sans téléphone"}</small></span><span className="stage" data-stage={row.archived_at ? "archive" : row.etape}>{row.archived_at ? "Archivé" : label(etapes, row.etape)}</span></button><div className="manager-prospect-actions"><button type="button" onClick={() => setSelected(row)}>Gérer</button><button type="button" onClick={() => void ouvrirEdition(row)}>Modifier</button></div></article>)}</div>
+      <div className="manager-table-wrap"><table className="manager-table" style={{ minWidth: Math.max(360, visibleDossierColumns.length * 135 + 110) }}><thead><tr><th className="select-cell"><input type="checkbox" aria-label="Sélectionner la page" checked={tousLesResultats || pageEntiere} onChange={basculerPage} /></th>{visibleDossierColumns.includes("contact") && <th>Contact</th>}{visibleDossierColumns.includes("services") && <th>Services</th>}{visibleDossierColumns.includes("agent") && <th>Agent</th>}{visibleDossierColumns.includes("source") && <th>Source</th>}{visibleDossierColumns.includes("etape") && <th>Étape</th>}{visibleDossierColumns.includes("date") && <th>Date</th>}<th>Actions</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className={tousLesResultats || selectionIds.has(row.id) ? "selected" : ""}><td className="select-cell"><input type="checkbox" aria-label={`Sélectionner ${row.nom}`} checked={tousLesResultats || selectionIds.has(row.id)} onChange={() => basculerSelection(row.id)} /></td>{visibleDossierColumns.includes("contact") && <td><strong>{row.nom}</strong><small>{row.telephone || "—"}</small></td>}{visibleDossierColumns.includes("services") && <td>{(row.services ?? [row.service]).map((service) => label(services, service)).join(", ")}</td>}{visibleDossierColumns.includes("agent") && <td>{noms.get(row.owner_id ?? "") ?? "Non attribué"}</td>}{visibleDossierColumns.includes("source") && <td>{label(sourceChoices, row.source)}</td>}{visibleDossierColumns.includes("etape") && <td><span className="stage" data-stage={row.archived_at ? "archive" : row.etape}>{row.archived_at ? "Archivé" : label(etapes, row.etape)}</span></td>}{visibleDossierColumns.includes("date") && <td>{dateLabel(row.created_at)}</td>}<td><button onClick={() => setSelected(row)}>Gérer</button><button onClick={() => void ouvrirEdition(row)}>Modifier</button></td></tr>)}</tbody></table></div>
+      <div className="manager-prospect-list">{rows.map((row) => <article className={`manager-prospect-card ${tousLesResultats || selectionIds.has(row.id) ? "selected" : ""}`} key={row.id}><label className="card-select"><input type="checkbox" aria-label={`Sélectionner ${row.nom}`} checked={tousLesResultats || selectionIds.has(row.id)} onChange={() => basculerSelection(row.id)} /></label><button type="button" className="manager-prospect" onClick={() => setSelected(row)}><span className="avatar">{row.nom.slice(0, 1).toUpperCase()}</span><span className="manager-prospect-main"><strong>{row.nom}</strong><small>{(row.services ?? [row.service]).map((service) => label(services, service)).join(" · ")}</small><small>{noms.get(row.owner_id ?? "") ?? "Non attribué"} · {row.telephone || "Sans téléphone"}</small></span><span className="stage" data-stage={row.archived_at ? "archive" : row.etape}>{row.archived_at ? "Archivé" : label(etapes, row.etape)}</span></button><div className="manager-prospect-actions"><button type="button" onClick={() => setSelected(row)}>Gérer</button><button type="button" onClick={() => void ouvrirEdition(row)}>Modifier</button></div></article>)}</div>
+      {rows.length > 0 && <button type="button" className="mobile-select-page" onClick={basculerPage}>{pageEntiere ? "Désélectionner la page" : "Sélectionner toute la page"}</button>}
       {total > 30 && <div className="manager-pagination"><button disabled={page === 0 || listBusy} onClick={() => setPage((value) => value - 1)}><ArrowLeft size={16} /> Précédent</button><span>{page + 1} / {Math.ceil(total / 30)}</span><button disabled={(page + 1) * 30 >= total || listBusy} onClick={() => setPage((value) => value + 1)}>Suivant <ArrowRight size={16} /></button></div>}
       <p className="manager-footnote">L’export reprend tous les prospects correspondant aux filtres, pas seulement cette page. Le fichier contient des données personnelles : partagez-le avec précaution.</p>
     </>}
@@ -454,7 +577,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
       <div className="detail-block"><small>FICHE</small><p>{selected.localisation || "Lieu non précisé"} · Créé le {dateLabel(selected.created_at)}</p></div>
       <div className="detail-block"><small>SUIVI</small><p>Agent : {noms.get(selected.owner_id ?? "") ?? "Non attribué"} · Étape : {selected.archived_at ? "Archivé" : label(etapes, selected.etape)} · Température : {selected.temperature ? label(temperatures, selected.temperature) : "Non qualifié"}</p></div>
       {selected.besoin && <div className="detail-block"><small>BESOIN</small><p>{selected.besoin}</p></div>}
-      <div className="detail-block"><small>HISTORIQUE DU SUIVI</small>{activities.length ? activities.map((item) => <p key={item.id}><strong>{dateLabel(item.effectuee_at)} · {item.type_activite}</strong><br />{item.resultat || "Compte rendu"}{item.decision && ` · ${item.decision === "programmer" ? "action programmée" : item.decision === "archiver" ? "dossier archivé" : `classé ${label(etapes, item.etape_classee ?? "")}`}`}{item.notes && <><br />{item.notes}</>}</p>) : <p>Aucun échange enregistré.</p>}</div>
+      <div className="detail-block"><small>HISTORIQUE COMPLET DU DOSSIER</small><DossierHistory client={client} dossierId={selected.id} /></div>
       <button className="primary-button" onClick={() => void ouvrirEdition(selected)}>Modifier le dossier <ArrowRight size={17} /></button>
     </div></section></div>}
     {editing && <div className="sheet-backdrop" onClick={() => setEditing(null)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Modifier le dossier" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setEditing(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>MODIFIER LE DOSSIER</span><button className="icon-button" onClick={() => setEditing(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{editing.nom}</h2>{message && <div className="form-feedback" role="status">{message}</div>}<form key={editing.id} className="new-form" onSubmit={(event) => void enregistrerModification(event)}>
@@ -467,7 +590,8 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
       <label className="field">Agent<select name="owner_id" defaultValue={editing.owner_id ?? ""}><option value="">Non attribué</option>{agents.filter((agent) => agent.actif || agent.user_id === editing.owner_id).map((agent) => <option key={agent.user_id} value={agent.user_id}>{agent.nom}</option>)}</select></label>
       <p className="field-help">Changer l’agent réattribue tous les dossiers et actions ouverts de ce contact.</p>
       <label className="field">Source<select name="source" defaultValue={editing.source}>{sourceChoices.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
-      <label className="field">Étape<select name="etape" defaultValue={editing.etape}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
+      <label className="field">Étape<select name="etape" defaultValue={editing.etape} onChange={(event) => setEtapeEdition(event.target.value)}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
+      {etapeEdition !== editing.etape && motifsPour(etapeEdition) && <MotifField key={etapeEdition} options={motifsPour(etapeEdition)!} label={etapeEdition === "perdu" ? "Pourquoi le dossier est-il perdu ?" : "Pourquoi le dossier est-il reporté ?"} />}
       <label className="field">Température<select name="temperature" defaultValue={editing.temperature ?? ""}><option value="">Non qualifié</option>{temperatures.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
       <label className="field">Type de bien<input name="type_bien" defaultValue={editing.type_bien ?? ""} /></label>
       <label className="field">Adresse du bien<input name="adresse_bien" defaultValue={editing.adresse_bien ?? ""} /></label>
@@ -475,6 +599,17 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
       <label className="field">Agence en place<select name="agence_en_place" defaultValue={editing.agence_en_place ?? ""}><option value="">Non renseigné</option><option value="oui">Oui</option><option value="non">Non</option><option value="inconnu">Ne sait pas</option></select></label>
       <label className="field">Besoin exprimé<textarea name="besoin" rows={3} defaultValue={editing.besoin ?? ""} /></label>
       <button className="primary-button" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer les modifications"}<Check size={18} /></button>
+    </form></div></section></div>}
+    {transfertOuvert && <div className="sheet-backdrop" onClick={() => setTransfertOuvert(false)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Transférer les dossiers" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setTransfertOuvert(false)} aria-label="Retour"><ArrowLeft size={20} /></button><span>TRANSFÉRER {nombreSelectionnes} DOSSIER{nombreSelectionnes > 1 ? "S" : ""}</span><button className="icon-button" onClick={() => setTransfertOuvert(false)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body">{message && <div className="form-feedback" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void transfererSelection(event)}>
+      <label className="field">Nouvel agent <b>*</b><select name="owner_id" required defaultValue=""><option value="" disabled>Choisir un agent actif</option>{repreneurs.map((agent) => <option key={agent.user_id} value={agent.user_id}>{agent.nom}</option>)}</select></label>
+      <MotifField options={motifsTransfert} label="Motif du transfert" />
+      <p className="field-help">Les actions ouvertes suivent les dossiers. Un contact et tous ses dossiers restent chez le même agent : ses autres dossiers sont transférés avec lui.</p>
+      <button className="primary-button" disabled={saving || repreneurs.length === 0}>{saving ? "Transfert…" : "Transférer"}<ArrowRightLeft size={17} /></button>
+    </form></div></section></div>}
+    {gestionAgent && <div className="sheet-backdrop" onClick={() => setGestionAgent(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label={gestionAgent.mode === "desactiver" ? "Désactiver l’agent" : "Transférer le portefeuille"} onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setGestionAgent(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>{gestionAgent.mode === "desactiver" ? "DÉSACTIVER L’AGENT" : "TRANSFÉRER LE PORTEFEUILLE"}</span><button className="icon-button" onClick={() => setGestionAgent(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{gestionAgent.agent.nom}</h2><p>{gestionAgent.mode === "desactiver" ? "L’agent ne pourra plus se connecter à Trabad Commercial ni recevoir de dossiers. Son historique est conservé." : `${gestionAgent.agent.dossiers_total ?? 0} dossier${Number(gestionAgent.agent.dossiers_total ?? 0) > 1 ? "s" : ""}, y compris clôturés et archivés, seront confiés au nouvel agent avec leurs actions ouvertes.`}</p>{message && <div className="form-feedback" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void gererAgent(event)}>
+      <label className="field">{gestionAgent.mode === "desactiver" ? "Qui reprend ses dossiers ?" : "Nouvel agent"} {gestionAgent.mode === "transferer" && <b>*</b>}<select name="repreneur" required={gestionAgent.mode === "transferer"} defaultValue="">{gestionAgent.mode === "desactiver" ? <option value="">Personne pour l’instant (à transférer plus tard)</option> : <option value="" disabled>Choisir un agent actif</option>}{repreneurs.filter((agent) => agent.user_id !== gestionAgent.agent.user_id).map((agent) => <option key={agent.user_id} value={agent.user_id}>{agent.nom}</option>)}</select></label>
+      <MotifField options={gestionAgent.mode === "desactiver" ? motifsDesactivation : motifsTransfert} label={gestionAgent.mode === "desactiver" ? "Motif de la désactivation" : "Motif du transfert"} />
+      <button className="primary-button" disabled={saving}>{saving ? "Enregistrement…" : gestionAgent.mode === "desactiver" ? "Désactiver l’agent" : "Transférer les dossiers"}<Check size={17} /></button>
     </form></div></section></div>}
     {profilEdit && <div className="sheet-backdrop" onClick={() => setProfilEdit(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Gérer un agent" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setProfilEdit(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>{profilEdit === "nouveau" ? "AJOUTER UN AGENT" : "MODIFIER L’AGENT"}</span><button className="icon-button" onClick={() => setProfilEdit(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><p>Le compte et le droit Commercial se créent dans Loc Manager. Liez ici son profil terrain.</p><form className="new-form" onSubmit={(event) => void enregistrerProfil(event)}>{profilEdit === "nouveau" && <label className="field">Compte commercial<select name="user_id" required defaultValue=""><option value="" disabled>Choisir un compte actif</option>{eligibles.filter((item) => item.actif && !item.profil_existant).map((item) => <option key={item.user_id} value={item.user_id}>{item.nom}</option>)}</select></label>}<label className="field">Zone de prospection<input name="zone" defaultValue={profilEdit === "nouveau" ? "" : profilEdit.zone ?? ""} placeholder="Ex. Cocody et Bingerville" /></label><button className="primary-button" disabled={saving || profilEdit === "nouveau" && !eligibles.some((item) => item.actif && !item.profil_existant)}>{saving ? "Enregistrement…" : "Enregistrer"}<Check size={17} /></button>{profilEdit === "nouveau" && !eligibles.some((item) => item.actif && !item.profil_existant) && <p className="field-help">Aucun compte éligible. Créez d’abord un utilisateur avec le droit Commercial dans Loc Manager.</p>}</form></div></section></div>}
   </div>;

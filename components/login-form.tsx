@@ -7,11 +7,12 @@ import { ArrowRight, LockKeyhole, Sparkles } from "lucide-react";
 
 function accessMessage(code?: string) {
   if (code === "consultant") return "Votre accès est limité à la consultation dans Trabad Gestion. L’application Trabad Commercial n’est pas accessible avec ce profil.";
+  if (code === "inactif") return "Votre profil commercial a été désactivé. Contactez votre responsable si vous pensez qu’il s’agit d’une erreur.";
   if (code === "sans_acces") return "Votre compte ne dispose pas d’un accès à l’application Trabad Commercial. Contactez votre responsable pour obtenir un accès.";
   return "Identifiant ou mot de passe incorrect.";
 }
 
-export function LoginForm({ accessDenied }: { accessDenied?: "consultant" | "sans_acces" }) {
+export function LoginForm({ accessDenied }: { accessDenied?: "consultant" | "sans_acces" | "inactif" }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 

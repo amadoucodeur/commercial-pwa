@@ -19,10 +19,17 @@ const supabaseAdmin = createClient(
 class CommercialAccessDenied extends CredentialsSignin {
   code: string;
 
-  constructor(code: "consultant" | "sans_acces") {
+  constructor(code: "consultant" | "sans_acces" | "inactif") {
     super();
     this.code = code;
   }
+}
+
+// Un profil commercial désactivé bloque l'agent ; un responsable garde son accès.
+async function profilInactif(userId: string, roles: { commercial?: string; admin?: string } | null) {
+  if (roles?.commercial === "editor" || roles?.admin === "admin") return false;
+  const { data } = await supabaseAdmin.from("crm_profiles").select("actif").eq("user_id", userId).maybeSingle();
+  return data?.actif === false;
 }
 
 async function accessToken(userId: string, organisationId: string) {
@@ -55,6 +62,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         throw new CommercialAccessDenied("sans_acces");
       }
 
+      if (await profilInactif(user.id, user.roles)) throw new CommercialAccessDenied("inactif");
+
       const { data: organisation } = await supabaseAdmin.from("organisations")
         .select("is_active").eq("id", user.organisation_id).maybeSingle();
       if (!organisation?.is_active) return null;
@@ -79,6 +88,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           token.accessDenied = currentUser?.roles?.commercial === "viewer" ? "consultant" : "sans_acces";
           return token;
         }
+        if (await profilInactif(String(token.userId), currentUser.roles)) {
+          token.accessToken = undefined;
+          token.accessTokenExpiresAt = undefined;
+          token.accessDenied = "inactif";
+          return token;
+        }
         token.accessDenied = undefined;
         if (!token.accessTokenExpiresAt || Date.now() > Number(token.accessTokenExpiresAt) - 5 * 60_000) {
           token.accessToken = await accessToken(String(token.userId), String(token.organisationId));
@@ -91,7 +106,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.id = String(token.userId ?? "");
       session.user.organisationId = String(token.organisationId ?? "");
       session.accessToken = String(token.accessToken ?? "");
-      session.accessDenied = token.accessDenied === "consultant" ? "consultant" : token.accessDenied === "sans_acces" ? "sans_acces" : undefined;
+      session.accessDenied = token.accessDenied === "consultant" || token.accessDenied === "sans_acces" || token.accessDenied === "inactif"
+        ? token.accessDenied : undefined;
       return session;
     },
   },

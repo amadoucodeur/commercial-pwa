@@ -14,7 +14,9 @@ import { ProspectForm } from "./prospect-form";
 import { ManagerLocalities } from "./manager-localities";
 import { ManagerWorkspace } from "./manager-workspace";
 import { DesktopDossierTable } from "./desktop-dossier-table";
-import { actions, services, sources, type Contact, type Localite, type ProspectPayload } from "../lib/crm";
+import { DossierHistory } from "./dossier-history";
+import { MotifField, lireMotif } from "./motif-field";
+import { actions, motifsPour, services, sources, type Contact, type Localite, type ProspectPayload } from "../lib/crm";
 import {
   echecTemporaire, ecrireLocal, envoyerOperation, estLocal, idLocal, lireLocal, viderLocal,
   type OperationHorsLigne, type OperationSansMeta,
@@ -39,9 +41,8 @@ type Dossier = {
   created_at: string;
 };
 type Tache = { id: string; opportunite_id: string; titre: string; echeance_at: string; notes: string | null };
-type Activite = { id: string; type_activite: string; resultat: string | null; notes: string | null; decision: string | null; etape_classee: string | null; effectuee_at: string };
 type Vue = "accueil" | "dossiers" | "agenda" | "pilotage" | "compte" | "localites";
-type Agent = { user_id: string; nom: string; actif: boolean };
+type Agent = { user_id: string; nom: string; actif: boolean; profil_existant?: boolean };
 type DonneesLocales = {
   contacts: Contact[]; dossiers: Dossier[]; dossiersSuivants: boolean; taches: Tache[]; localites: Localite[];
   profilActif: boolean; manager: boolean; agents: { user_id: string; nom: string }[]; agentsTous: Agent[];
@@ -91,8 +92,10 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   const [agentsTous, setAgentsTous] = useState<Agent[]>([]);
   const [selection, setSelection] = useState<string | null>(null);
   const [completion, setCompletion] = useState<Tache | null>(null);
-  const [historique, setHistorique] = useState<Activite[]>([]);
   const [completionDecision, setCompletionDecision] = useState("programmer");
+  const [completionEtape, setCompletionEtape] = useState("nouveau");
+  const [etapeAConfirmer, setEtapeAConfirmer] = useState<string | null>(null);
+  const [historiqueVersion, setHistoriqueVersion] = useState(0);
   const [creation, setCreation] = useState(false);
   const [recherche, setRecherche] = useState("");
   const [filtresDesktop, setFiltresDesktop] = useState<FiltresDesktop>(filtresDesktopVides);
@@ -330,18 +333,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       }).catch(() => { if (active && navigator.onLine) setMessage("Agents indisponibles. Vérifiez votre connexion."); });
     return () => { active = false; };
   }, [client, manager, managerRefreshKey, session.user.organisationId]);
-  useEffect(() => {
-    if (!selection || estLocal(selection)) { setHistorique([]); return; }
-    let active = true;
-    void Promise.resolve(client.from("crm_activites").select("id,type_activite,resultat,notes,decision,etape_classee,effectuee_at")
-      .eq("opportunite_id", selection).order("effectuee_at", { ascending: false }).limit(50))
-      .then(({ data, error }) => {
-        if (!active) return;
-        if (error) { if (navigator.onLine) setMessage(`Historique indisponible : ${error.message}`); }
-        else setHistorique((data ?? []) as Activite[]);
-      }).catch(() => { if (active && navigator.onLine) setMessage("Historique indisponible. Vérifiez votre connexion."); });
-    return () => { active = false; };
-  }, [client, selection]);
+  useEffect(() => { setEtapeAConfirmer(null); }, [selection]);
   useEffect(() => {
     if (sessionStatus !== "unauthenticated" && session.accessToken) return;
     // Hors connexion, la session ne peut pas être vérifiée : on garde celle de l'appareil.
@@ -500,6 +492,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     const prochaineAction = decision === "programmer" ? String(form.get("prochaine_action") || "") : null;
     const echeance = decision === "programmer" ? new Date(`${String(form.get("echeance"))}:00Z`).toISOString() : null;
     const etape = decision === "classer" ? String(form.get("etape")) : null;
+    const motif = motifsPour(etape, decision === "archiver") ? lireMotif(form) : null;
     const success = await executer({ type: "rpc", fn: "crm_clore_action", libelle: `Compte rendu « ${tache.titre} »`, args: {
       p_tache_id: tache.id,
       p_type_activite: String(form.get("type")),
@@ -509,6 +502,8 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       p_prochaine_action: prochaineAction,
       p_echeance_at: echeance,
       p_etape: etape,
+      // Envoyé seulement s'il est requis, pour rester compatible avec l'ancienne signature serveur.
+      ...(motif ? { p_motif: motif } : {}),
     } }, "Action terminée et suite enregistrée dans l’historique.", "crm", () => {
       setTaches((courantes) => courantes.filter((item) => item.id !== tache.id
         && !(decision === "archiver" && item.opportunite_id === tache.opportunite_id)));
@@ -518,7 +513,17 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       if (decision === "archiver") setDossiers((courants) => courants.filter((item) => item.id !== tache.opportunite_id));
       if (etape) setDossiers((courants) => courants.map((item) => item.id === tache.opportunite_id ? { ...item, etape } : item));
     });
-    if (success) setCompletion(null);
+    if (success) { setCompletion(null); setHistoriqueVersion((value) => value + 1); }
+  }
+
+  function changerEtape(dossier: Dossier, etape: string, motif?: string) {
+    const local = () => setDossiers((courants) => courants.map((item) => item.id === dossier.id ? { ...item, etape } : item));
+    const operation: OperationSansMeta = motif
+      ? { type: "rpc", fn: "crm_changer_etape", args: { p_id: dossier.id, p_etape: etape, p_motif: motif }, libelle: `Étape « ${label(etapes, etape)} »` }
+      : { type: "update", table: "crm_opportunites", ligneId: dossier.id, valeurs: { etape }, libelle: `Étape « ${label(etapes, etape)} »` };
+    void executer(operation, "Étape mise à jour.", "none", local).then((success) => {
+      if (success) { setEtapeAConfirmer(null); setHistoriqueVersion((value) => value + 1); }
+    });
   }
 
   function ajouterGps(dossier: Dossier) {
@@ -547,7 +552,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
         <button onClick={() => setSelection(tache.opportunite_id)}>Voir la fiche <ChevronRight size={15} /></button>
         {estLocal(tache.id) || estLocal(tache.opportunite_id)
           ? <span className="pending-action"><CloudUpload size={15} /> En attente d’envoi</span>
-          : <button className="finish-action" onClick={() => { setCompletionDecision("programmer"); setMessage(""); setCompletion(tache); }}><Check size={16} /> Terminer</button>}
+          : <button className="finish-action" onClick={() => { setCompletionDecision("programmer"); setCompletionEtape("nouveau"); setMessage(""); setCompletion(tache); }}><Check size={16} /> Terminer</button>}
       </div>
     </article>;
   }
@@ -627,12 +632,13 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       {dossierActif.besoin && <div className="detail-block"><small>BESOIN EXPRIMÉ</small><p>{dossierActif.besoin}</p></div>}
       {(dossierActif.type_bien || dossierActif.adresse_bien) && <div className="detail-block"><small>BIEN CONCERNÉ</small><p>{[dossierActif.type_bien, dossierActif.adresse_bien].filter(Boolean).join(" · ")}</p></div>}
       <div className="detail-block"><small>POSITION GPS</small>{dossierActif.gps_latitude !== null && dossierActif.gps_longitude !== null ? <p><a className="map-link" href={`https://www.google.com/maps?q=${dossierActif.gps_latitude},${dossierActif.gps_longitude}`} target="_blank" rel="noopener noreferrer"><MapPinned size={16} /> Ouvrir sur la carte ↗</a></p> : <p>Non renseignée</p>}{!dossierLocal && <button className="text-action" onClick={() => ajouterGps(dossierActif)}><Crosshair size={15} /> {dossierActif.gps_latitude === null ? "Ajouter ma position" : "Actualiser la position"}</button>}</div>
-      <label className="field">Étape du dossier<select value={dossierActif.etape} disabled={busy || dossierLocal} onChange={(event) => { const etape = event.target.value; void executer({ type: "update", table: "crm_opportunites", ligneId: dossierActif.id, valeurs: { etape }, libelle: `Étape « ${label(etapes, etape)} »` }, "Étape mise à jour.", "none", () => setDossiers((courants) => courants.map((item) => item.id === dossierActif.id ? { ...item, etape } : item))); }}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
-      <div className="detail-block"><small>HISTORIQUE DU SUIVI</small>{historique.length ? historique.map((item) => <p key={item.id}><strong>{dateTime(item.effectuee_at)} · {item.type_activite}</strong><br />{item.resultat || "Compte rendu"}{item.decision && ` · ${item.decision === "programmer" ? "prochaine action programmée" : item.decision === "archiver" ? "dossier archivé" : `classé ${label(etapes, item.etape_classee ?? "")}`}`}{item.notes && <><br />{item.notes}</>}</p>) : <p>Aucun échange enregistré.</p>}</div>
+      <label className="field">Étape du dossier<select value={etapeAConfirmer ?? dossierActif.etape} disabled={busy || dossierLocal} onChange={(event) => { const etape = event.target.value; if (motifsPour(etape)) setEtapeAConfirmer(etape); else { setEtapeAConfirmer(null); changerEtape(dossierActif, etape); } }}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
+      {etapeAConfirmer && motifsPour(etapeAConfirmer) && <form className="new-form motif-confirm" onSubmit={(event) => { event.preventDefault(); changerEtape(dossierActif, etapeAConfirmer, lireMotif(new FormData(event.currentTarget))); }}><p className="field-help">Pourquoi ce dossier passe-t-il en « {label(etapes, etapeAConfirmer)} » ?</p><MotifField key={etapeAConfirmer} options={motifsPour(etapeAConfirmer)!} /><div className="flow-actions"><button type="button" className="secondary-button" onClick={() => setEtapeAConfirmer(null)}>Annuler</button><button className="primary-button" disabled={busy}>Confirmer <Check size={17} /></button></div></form>}
+      <details className="detail-block history-block"><summary><small>HISTORIQUE COMPLET DU DOSSIER</small><span>Créateur, propriétaires, étapes et actions</span></summary>{dossierLocal ? <p className="field-help">Disponible après l’envoi du dossier.</p> : <DossierHistory client={client} dossierId={dossierActif.id} refreshKey={historiqueVersion} />}</details>
       <h3>Programmer une action</h3>{dossierLocal ? <p className="field-help">Disponible dès que le dossier aura été envoyé.</p> : dossierActif.owner_id ? <form className="new-form" onSubmit={(event) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const titre = String(form.get("titre")); const echeance = new Date(`${form.get("echeance")}:00Z`).toISOString(); const responsable = dossierActif.owner_id; const opportunite = dossierActif.id; void executer({ type: "insert", table: "crm_taches", libelle: `Action « ${titre} »`, valeurs: { organisation_id: session.user.organisationId, opportunite_id: opportunite, responsable_id: responsable, createur_id: session.user.id, titre, echeance_at: echeance } }, "Action programmée.", "taches", () => { if (responsable === session.user.id) ajouterTacheLocale({ id: idLocal(), opportunite_id: opportunite, titre, echeance_at: echeance, notes: null }); }).then((success) => { if (success) formElement.reset(); }); }}><label className="field">Action<select name="titre" defaultValue="Rappeler">{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure (Abidjan)<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label><button className="primary-button" disabled={busy}>Ajouter au programme <ArrowRight size={17} /></button></form> : <p className="field-help">Attribuez d’abord ce dossier à un commercial depuis Loc Manager.</p>}
     </div></section></div>}
 
-    {completion && <div className="sheet-backdrop" onClick={() => setCompletion(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Terminer l’action" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>COMPTE RENDU</span><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{completion.titre}</h2><p>Notez le résultat et choisissez la suite. Tout sera conservé dans l’historique.</p>{message && <div className="toast" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void terminerTache(event)}><label className="field">Type d’échange<select name="type"><option value="appel">Appel</option><option value="visite">Visite</option><option value="rendez_vous">Rendez-vous</option><option value="message">Message</option><option value="note">Note</option></select></label><label className="field">Résultat<input name="resultat" required autoFocus placeholder="Ex. rendez-vous confirmé" /></label><label className="field">Note complémentaire<textarea name="notes" rows={2} placeholder="Facultatif" /></label><label className="field">Suite à donner<select name="decision" value={completionDecision} onChange={(event) => setCompletionDecision(event.target.value)}><option value="programmer">Programmer la prochaine action</option><option value="archiver">Archiver le dossier</option><option value="classer">Classer le dossier</option></select></label>{completionDecision === "programmer" && <><label className="field">Prochaine action<select name="prochaine_action" required>{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label></>}{completionDecision === "classer" && <label className="field">Classer à l’étape<select name="etape">{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>}{completionDecision === "archiver" && <p className="field-help">Les autres actions ouvertes de ce dossier seront annulées.</p>}<button className="primary-button" disabled={busy}>Terminer l’action <Check size={18} /></button></form></div></section></div>}
+    {completion && <div className="sheet-backdrop" onClick={() => setCompletion(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Terminer l’action" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>COMPTE RENDU</span><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{completion.titre}</h2><p>Notez le résultat et choisissez la suite. Tout sera conservé dans l’historique.</p>{message && <div className="toast" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void terminerTache(event)}><label className="field">Type d’échange<select name="type"><option value="appel">Appel</option><option value="visite">Visite</option><option value="rendez_vous">Rendez-vous</option><option value="message">Message</option><option value="note">Note</option></select></label><label className="field">Résultat<input name="resultat" required autoFocus placeholder="Ex. rendez-vous confirmé" /></label><label className="field">Note complémentaire<textarea name="notes" rows={2} placeholder="Facultatif" /></label><label className="field">Suite à donner<select name="decision" value={completionDecision} onChange={(event) => setCompletionDecision(event.target.value)}><option value="programmer">Programmer la prochaine action</option><option value="archiver">Archiver le dossier</option><option value="classer">Classer le dossier</option></select></label>{completionDecision === "programmer" && <><label className="field">Prochaine action<select name="prochaine_action" required>{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label></>}{completionDecision === "classer" && <label className="field">Classer à l’étape<select name="etape" value={completionEtape} onChange={(event) => setCompletionEtape(event.target.value)}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>}{completionDecision === "classer" && motifsPour(completionEtape) && <MotifField key={completionEtape} options={motifsPour(completionEtape)!} label={completionEtape === "perdu" ? "Pourquoi le dossier est-il perdu ?" : "Pourquoi le dossier est-il reporté ?"} />}{completionDecision === "archiver" && <><MotifField options={motifsPour(null, true)!} label="Pourquoi archiver ce dossier ?" /><p className="field-help">Les autres actions ouvertes de ce dossier seront annulées.</p></>}<button className="primary-button" disabled={busy}>Terminer l’action <Check size={18} /></button></form></div></section></div>}
 
     {creation && <div className="sheet-backdrop" onClick={() => setCreation(false)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Nouveau prospect" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCreation(false)} aria-label="Retour"><ArrowLeft size={20} /></button><span>NOUVEAU PROSPECT</span><button className="icon-button" onClick={() => setCreation(false)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><ProspectForm contacts={contacts} localites={localites} busy={busy} message={message} onClose={() => setCreation(false)} onSave={creerDossier} onSearchContacts={chercherContacts} manager={manager} agents={agents} /></div></section></div>}
   </div>;
