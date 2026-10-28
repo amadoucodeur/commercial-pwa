@@ -6,9 +6,9 @@ import { signIn } from "next-auth/react";
 import { ArrowRight, LockKeyhole, Sparkles } from "lucide-react";
 
 function accessMessage(code?: string) {
-  if (code === "consultant") return "Votre accès est limité à la consultation dans Trabad Gestion. L’application Trabad Commercial n’est pas accessible avec ce profil.";
+  if (code === "consultant") return "Votre accès commercial est limité à la consultation dans Trabad Gestion. Cette application n’est pas accessible avec ce profil.";
   if (code === "inactif") return "Votre profil commercial a été désactivé. Contactez votre responsable si vous pensez qu’il s’agit d’une erreur.";
-  if (code === "sans_acces") return "Votre compte ne dispose pas d’un accès à l’application Trabad Commercial. Contactez votre responsable pour obtenir un accès.";
+  if (code === "sans_acces") return "Votre compte n’a ni accès commercial ni accès au site vitrine. Contactez votre responsable pour obtenir un accès.";
   return "Identifiant ou mot de passe incorrect.";
 }
 
@@ -46,7 +46,7 @@ export function LoginForm({ accessDenied }: { accessDenied?: "consultant" | "san
       <div className="login-card">
         <div className="login-card-icon"><Sparkles size={19} /></div>
         <h2>Bon retour</h2>
-        <p>Connectez-vous avec votre compte commercial Trabad.</p>
+        <p>Connectez-vous avec votre compte Trabad : espace commercial ou gestion du site vitrine.</p>
         <form onSubmit={submit} className="login-form">
           <label>Identifiant<input name="identifiant" autoComplete="username" required maxLength={255} placeholder="Votre identifiant" /></label>
           <label>Mot de passe<input name="password" type="password" autoComplete="current-password" required maxLength={1024} placeholder="Votre mot de passe" /></label>
@@ -54,7 +54,7 @@ export function LoginForm({ accessDenied }: { accessDenied?: "consultant" | "san
           <button type="submit" className="primary-button" disabled={busy}>{busy ? "Connexion…" : "Accéder à mon espace"}<ArrowRight size={18} /></button>
         </form>
       </div>
-      <p className="login-foot"><LockKeyhole size={14} /> Espace réservé à l’équipe commerciale</p>
+      <p className="login-foot"><LockKeyhole size={14} /> Espace réservé aux équipes commerciale et vitrine</p>
     </div>
   </main>;
 }

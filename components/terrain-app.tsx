@@ -7,7 +7,7 @@ import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowRight, CalendarDays, Check, ChevronDown, ChevronRight, CirclePlus,
-  Clock3, CloudOff, CloudUpload, Compass, Crosshair, Home, LogOut, MapPin, MapPinned,
+  Clock3, CloudOff, CloudUpload, Compass, Crosshair, Globe2, Home, LogOut, MapPin, MapPinned,
   Phone, RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingUp, Users, X,
 } from "lucide-react";
 import { ProspectForm } from "./prospect-form";
@@ -17,6 +17,8 @@ import { DesktopDossierTable } from "./desktop-dossier-table";
 import { CommercialDashboard } from "./commercial-dashboard";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
+import { VitrineWorkspace } from "./vitrine-workspace";
+import type { SectionVitrine } from "../lib/vitrine";
 import { actions, motifsPour, services, sources, type Contact, type Localite, type ProspectPayload } from "../lib/crm";
 import {
   echecTemporaire, ecrireLocal, envoyerOperation, estLocal, idLocal, lireLocal, viderLocal,
@@ -42,7 +44,7 @@ type Dossier = {
   created_at: string;
 };
 type Tache = { id: string; opportunite_id: string; titre: string; echeance_at: string; notes: string | null };
-type Vue = "accueil" | "dossiers" | "agenda" | "pilotage" | "compte" | "localites";
+type Vue = "accueil" | "dossiers" | "agenda" | "pilotage" | "vitrine" | "compte" | "localites";
 type Agent = { user_id: string; nom: string; actif: boolean; profil_existant?: boolean };
 type DonneesLocales = {
   contacts: Contact[]; dossiers: Dossier[]; dossiersSuivants: boolean; taches: Tache[]; localites: Localite[];
@@ -81,6 +83,8 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     { global: { headers: { Authorization: `Bearer ${session.accessToken}` } }, auth: { persistSession: false } },
   ), [session.accessToken]);
   const [vue, setVue] = useState<Vue>("accueil");
+  const [sectionVitrine, setSectionVitrine] = useState<SectionVitrine>("biens");
+  const [vitrineRefreshKey, setVitrineRefreshKey] = useState(0);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [dossiers, setDossiers] = useState<Dossier[]>([]);
   const [dossiersSuivants, setDossiersSuivants] = useState(false);
@@ -335,6 +339,10 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     return () => { active = false; };
   }, [client, manager, managerRefreshKey, session.user.organisationId]);
   useEffect(() => { setEtapeAConfirmer(null); }, [selection]);
+  // Droit commercial retiré mais vitrine conservée : l'accueil bascule vers l'espace vitrine.
+  useEffect(() => {
+    if (enLigne && refreshedSession?.accessToken && !refreshedSession.acces?.commercial) window.location.assign("/");
+  }, [enLigne, refreshedSession?.accessToken, refreshedSession?.acces?.commercial]);
   useEffect(() => {
     if (sessionStatus !== "unauthenticated" && session.accessToken) return;
     // Hors connexion, la session ne peut pas être vérifiée : on garde celle de l'appareil.
@@ -567,15 +575,17 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   }
 
   const dossierLocal = estLocal(dossierActif?.id);
+  const accesVitrine = session.acces?.vitrine ?? null;
   const navigation = [
     ["accueil", Home, "Accueil"], ["dossiers", Users, "Dossiers"],
     ["agenda", CalendarDays, "Agenda"],
     ...(manager ? [["pilotage", TrendingUp, "Performance"]] as const : []),
+    ...(accesVitrine ? [["vitrine", Globe2, "Vitrine"]] as const : []),
     ["compte", Compass, "Compte"],
   ] as const;
 
   return <div className="app-frame">
-    <header className="topbar"><div className="topbar-inner"><div className="brand"><Image src="/icon-192.png" alt="" width={38} height={38} priority /><span>Trabad Commercial</span></div><div className="topbar-actions">{(!enLigne || fileAttente.length > 0) && <span className={`sync-chip ${enLigne ? "" : "offline"}`} role="status">{enLigne ? <CloudUpload size={15} /> : <CloudOff size={15} />}{enLigne ? synchroEnCours ? "Envoi…" : `${fileAttente.length} en attente` : `Hors ligne${fileAttente.length ? ` · ${fileAttente.length}` : ""}`}</span>}<button className="icon-button" onClick={() => vue === "pilotage" || vue === "dossiers" && gestionAvancee ? setManagerRefreshKey((value) => value + 1) : void actualiser()} aria-label="Actualiser"><RefreshCw size={19} /></button></div></div></header>
+    <header className="topbar"><div className="topbar-inner"><div className="brand"><Image src="/icon-192.png" alt="" width={38} height={38} priority /><span>Trabad Commercial</span></div><div className="topbar-actions">{(!enLigne || fileAttente.length > 0) && <span className={`sync-chip ${enLigne ? "" : "offline"}`} role="status">{enLigne ? <CloudUpload size={15} /> : <CloudOff size={15} />}{enLigne ? synchroEnCours ? "Envoi…" : `${fileAttente.length} en attente` : `Hors ligne${fileAttente.length ? ` · ${fileAttente.length}` : ""}`}</span>}<button className="icon-button" onClick={() => vue === "vitrine" ? setVitrineRefreshKey((value) => value + 1) : vue === "pilotage" || vue === "dossiers" && gestionAvancee ? setManagerRefreshKey((value) => value + 1) : void actualiser()} aria-label="Actualiser"><RefreshCw size={19} /></button></div></div></header>
     <aside className="desktop-sidebar" aria-label="Espace commercial"><div className="desktop-sidebar-inner"><p className="desktop-sidebar-label">ESPACE COMMERCIAL</p><nav aria-label="Navigation principale">{navigation.map(([key, Icon, title]) => <button key={key} type="button" className={vue === key || key === "compte" && vue === "localites" ? "active" : ""} aria-current={vue === key ? "page" : undefined} onClick={() => { setVue(key); setSelection(null); }}><Icon size={19} /><span>{title}</span><ChevronRight size={16} className="desktop-nav-chevron" /></button>)}</nav><div className="desktop-sidebar-foot"><span className="desktop-sidebar-avatar">{(session.user.name ?? "C").slice(0, 1).toUpperCase()}</span><span><strong>{session.user.name || "Commercial"}</strong><small>{manager ? "Responsable commercial" : "Agent commercial"}</small></span></div></div></aside>
     <main className={`content view-${vue}`}>
       {message && !creation && !selection && !completion && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
@@ -618,11 +628,12 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
         ].map((group) => <section className="agenda-group" key={group.title}><h2><span className={`group-dot ${group.tone}`} />{group.title}<small>{group.items.length}</small></h2>{group.items.length ? group.items.map(carteTache) : <p className="group-empty">Aucune action</p>}</section>)}</>}
         {vue === "pilotage" && manager && <ManagerWorkspace mode="performance" client={client} organisationId={session.user.organisationId} refreshKey={managerRefreshKey} localites={localites} onCreate={() => { setMessage(""); setCreation(true); }} onTeamChanged={() => setManagerRefreshKey((value) => value + 1)} onOpenAgentDossiers={(agentId) => { setAgentGestion(agentId); setGestionAvancee(true); setVue("dossiers"); }} />}
         {vue === "compte" && <><div className="page-title"><p className="eyebrow">VOTRE ESPACE</p><h1>Mon compte</h1></div><div className="account-card"><div className="account-avatar">{(session.user.name ?? "C").slice(0, 1).toUpperCase()}</div><strong>{session.user.name}</strong><span>Équipe commerciale Trabad</span><div className="account-status"><span className={enLigne ? "" : "offline"}>● {enLigne ? "En ligne" : "Hors ligne"}{fileAttente.length ? ` · ${fileAttente.length} en attente` : ""}</span><span>{profilActif ? "Profil actif" : "Profil non lié"}</span></div></div>{manager && <button className="manager-link" onClick={() => setVue("localites")}><span className="manager-icon"><MapPinned size={20} /></span><span><strong>Communes & localités</strong><small>Ajouter, activer ou désactiver des lieux</small></span><ChevronRight size={19} /></button>}<div className="account-note"><Compass size={20} /><p>Sans réseau, vos dossiers restent consultables et vos saisies sont gardées sur l’appareil, puis envoyées automatiquement au retour de la connexion. Le GPS n’est ajouté qu’avec l’autorisation de votre appareil.</p></div><button className="logout" disabled={!enLigne} onClick={() => void deconnecter()}><LogOut size={18} /> Se déconnecter</button>{!enLigne && <p className="field-help">La déconnexion nécessite le réseau.</p>}</>}
+        {vue === "vitrine" && accesVitrine && <VitrineWorkspace client={client} canEdit={accesVitrine === "editor"} section={sectionVitrine} onSection={setSectionVitrine} onglets refreshKey={vitrineRefreshKey} enLigne={enLigne} />}
         {vue === "localites" && manager && <ManagerLocalities client={client} organisationId={session.user.organisationId} localites={localites} reload={() => charger(false, "localites")} onBack={() => setVue("compte")} />}
       </>}
     </main>
     {(profilActif || manager) && (vue === "dossiers" || vue === "agenda") && <button className="fab" onClick={() => { setMessage(""); setCreation(true); }} aria-label="Nouveau prospect"><CirclePlus size={26} /></button>}
-    <nav className={`bottom-nav ${manager ? "manager-nav" : ""}`} aria-label="Navigation principale">{navigation.map(([key, Icon, title]) => <button key={key} className={vue === key || key === "compte" && vue === "localites" ? "active" : ""} onClick={() => { setVue(key); setSelection(null); }}><Icon size={21} /><span>{title}</span></button>)}</nav>
+    <nav className={`bottom-nav ${navigation.length > 5 ? "dense-nav" : manager || navigation.length > 4 ? "manager-nav" : ""}`} aria-label="Navigation principale">{navigation.map(([key, Icon, title]) => <button key={key} className={vue === key || key === "compte" && vue === "localites" ? "active" : ""} onClick={() => { setVue(key); setSelection(null); }}><Icon size={21} /><span>{title}</span></button>)}</nav>
 
     {selection && dossierActif && <div className="sheet-backdrop" onClick={() => setSelection(null)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Détail du dossier" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setSelection(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>DÉTAIL DU DOSSIER</span><button className="icon-button" onClick={() => setSelection(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body">
       {message && <div className="toast" role="status">{message}</div>}
