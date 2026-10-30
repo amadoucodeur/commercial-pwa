@@ -820,3 +820,20 @@ h1, h2, h3 { letter-spacing: -.035em; }
   .vt-skeleton, .vt-spin { animation: none; }
   .vt-switch-track, .vt-switch-track span, .vt-card { transition: none; }
 }
+
+/* Reprogrammation d'une action */
+.reprog-choix { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 7px; }
+.reprog-choix button { display: grid; gap: 2px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 11px; background: white; color: var(--ink); text-align: left; }
+.reprog-choix button strong { font-size: 12px; font-weight: 750; }
+.reprog-choix button small { color: #7d8ca2; font-size: 11px; font-weight: 500; }
+.reprog-choix button.active { border-color: var(--navy); background: var(--navy); color: white; }
+.reprog-choix button.active small { color: #c9d5e6; }
+.field-optional { margin-left: 4px; color: #93a1b5; font-weight: 500; }
+.reprog-resume { display: flex; align-items: center; gap: 8px; margin: 0; padding: 11px 12px; border-radius: 11px; background: #f3f7fc; color: #4a607d; font-size: 12px; }
+.reprog-resume strong { color: var(--ink); }
+
+/* Période des performances */
+.manager-period-presets { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin-bottom: 8px; }
+.manager-period-select { display: grid; gap: 5px; flex: 1 1 200px; max-width: 280px; color: #75849b; font-size: 11px; font-weight: 750; }
+.manager-period-select select { min-height: 42px; padding: 9px 10px; border: 1px solid #dce4f0; border-radius: 10px; background: white; color: var(--ink); font-size: 12px; }
+.manager-period-label { padding-bottom: 12px; color: #4a607d; font-size: 12px; font-weight: 650; }

@@ -6,7 +6,7 @@ import type { Session } from "next-auth";
 import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, CalendarDays, Check, ChevronDown, ChevronRight, CirclePlus,
+  ArrowLeft, ArrowRight, CalendarClock, CalendarDays, Check, ChevronDown, ChevronRight, CirclePlus,
   Clock3, CloudOff, CloudUpload, Compass, Crosshair, Globe2, Home, LogOut, MapPin, MapPinned,
   Phone, RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingUp, Users, X,
 } from "lucide-react";
@@ -15,6 +15,7 @@ import { ManagerLocalities } from "./manager-localities";
 import { ManagerWorkspace } from "./manager-workspace";
 import { DesktopDossierTable } from "./desktop-dossier-table";
 import { CommercialDashboard } from "./commercial-dashboard";
+import { ReprogrammerAction, noteReprogrammee } from "./reprogrammer-action";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
 import { VitrineWorkspace } from "./vitrine-workspace";
@@ -97,6 +98,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   const [agentsTous, setAgentsTous] = useState<Agent[]>([]);
   const [selection, setSelection] = useState<string | null>(null);
   const [completion, setCompletion] = useState<Tache | null>(null);
+  const [reprogrammation, setReprogrammation] = useState<Tache | null>(null);
   const [completionDecision, setCompletionDecision] = useState("programmer");
   const [completionEtape, setCompletionEtape] = useState("nouveau");
   const [etapeAConfirmer, setEtapeAConfirmer] = useState<string | null>(null);
@@ -383,11 +385,11 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     return () => document.removeEventListener("keydown", fermerEchap);
   }, [filtresOuverts]);
   useEffect(() => {
-    if (!filtresOuverts && !selection && !completion && !creation) return;
+    if (!filtresOuverts && !selection && !completion && !reprogrammation && !creation) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
-  }, [filtresOuverts, selection, completion, creation]);
+  }, [filtresOuverts, selection, completion, reprogrammation, creation]);
 
   const contactParId = useMemo(() => new Map(contacts.map((contact) => [contact.id, contact])), [contacts]);
   const dossierParId = useMemo(() => new Map(dossiers.map((dossier) => [dossier.id, dossier])), [dossiers]);
@@ -525,6 +527,18 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     if (success) { setCompletion(null); setHistoriqueVersion((value) => value + 1); }
   }
 
+  // Décale l'action sans la clore : la note garde la trace de l'ancienne date et du motif.
+  async function reprogrammerTache(tache: Tache, echeance: Date, motif: string) {
+    const echeanceAt = echeance.toISOString();
+    const notes = noteReprogrammee(tache.notes, new Date(tache.echeance_at), echeance, motif);
+    const success = await executer({ type: "update", table: "crm_taches", ligneId: tache.id, libelle: `Reprogrammation « ${tache.titre} »`, valeurs: {
+      echeance_at: echeanceAt, notes,
+    } }, `Action reprogrammée au ${dateTime(echeanceAt)}.`, "taches", () => setTaches((courantes) => courantes
+      .map((item) => item.id === tache.id ? { ...item, echeance_at: echeanceAt, notes } : item)
+      .sort((a, b) => a.echeance_at.localeCompare(b.echeance_at))));
+    if (success) setReprogrammation(null);
+  }
+
   function changerEtape(dossier: Dossier, etape: string, motif?: string) {
     const local = () => setDossiers((courants) => courants.map((item) => item.id === dossier.id ? { ...item, etape } : item));
     const operation: OperationSansMeta = motif
@@ -561,7 +575,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
         <button onClick={() => setSelection(tache.opportunite_id)}>Voir la fiche <ChevronRight size={15} /></button>
         {estLocal(tache.id) || estLocal(tache.opportunite_id)
           ? <span className="pending-action"><CloudUpload size={15} /> En attente d’envoi</span>
-          : <button className="finish-action" onClick={() => { setCompletionDecision("programmer"); setCompletionEtape("nouveau"); setMessage(""); setCompletion(tache); }}><Check size={16} /> Terminer</button>}
+          : <><button onClick={() => { setMessage(""); setReprogrammation(tache); }}><CalendarClock size={15} /> Reprogrammer</button><button className="finish-action" onClick={() => { setCompletionDecision("programmer"); setCompletionEtape("nouveau"); setMessage(""); setCompletion(tache); }}><Check size={16} /> Terminer</button></>}
       </div>
     </article>;
   }
@@ -588,7 +602,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     <header className="topbar"><div className="topbar-inner"><div className="brand"><Image src="/icon-192.png" alt="" width={38} height={38} priority /><span>Trabad Commercial</span></div><div className="topbar-actions">{(!enLigne || fileAttente.length > 0) && <span className={`sync-chip ${enLigne ? "" : "offline"}`} role="status">{enLigne ? <CloudUpload size={15} /> : <CloudOff size={15} />}{enLigne ? synchroEnCours ? "Envoi…" : `${fileAttente.length} en attente` : `Hors ligne${fileAttente.length ? ` · ${fileAttente.length}` : ""}`}</span>}<button className="icon-button" onClick={() => vue === "vitrine" ? setVitrineRefreshKey((value) => value + 1) : vue === "pilotage" || vue === "dossiers" && gestionAvancee ? setManagerRefreshKey((value) => value + 1) : void actualiser()} aria-label="Actualiser"><RefreshCw size={19} /></button></div></div></header>
     <aside className="desktop-sidebar" aria-label="Espace commercial"><div className="desktop-sidebar-inner"><p className="desktop-sidebar-label">ESPACE COMMERCIAL</p><nav aria-label="Navigation principale">{navigation.map(([key, Icon, title]) => <button key={key} type="button" className={vue === key || key === "compte" && vue === "localites" ? "active" : ""} aria-current={vue === key ? "page" : undefined} onClick={() => { setVue(key); setSelection(null); }}><Icon size={19} /><span>{title}</span><ChevronRight size={16} className="desktop-nav-chevron" /></button>)}</nav><div className="desktop-sidebar-foot"><span className="desktop-sidebar-avatar">{(session.user.name ?? "C").slice(0, 1).toUpperCase()}</span><span><strong>{session.user.name || "Commercial"}</strong><small>{manager ? "Responsable commercial" : "Agent commercial"}</small></span></div></div></aside>
     <main className={`content view-${vue}`}>
-      {message && !creation && !selection && !completion && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
+      {message && !creation && !selection && !completion && !reprogrammation && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
       {loading ? <div className="loading"><Sparkles size={23} /> Votre espace se prépare…</div> : <>
         {vue === "accueil" && <>
           <section className="hero"><div className="hero-decoration" /><p className="eyebrow light">AUJOURD’HUI SUR LE TERRAIN</p><h1>Bonjour, {prenom}<span>✦</span></h1><p>Chaque rencontre est une opportunité.</p><div className="hero-bottom"><span><CalendarDays size={15} /> {new Intl.DateTimeFormat("fr-FR", { dateStyle: "full", timeZone: "Africa/Abidjan" }).format(new Date())}</span></div></section>
@@ -651,6 +665,14 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       <h3>Programmer une action</h3>{dossierLocal ? <p className="field-help">Disponible dès que le dossier aura été envoyé.</p> : dossierActif.owner_id ? <form className="new-form" onSubmit={(event) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const titre = String(form.get("titre")); const echeance = new Date(`${form.get("echeance")}:00Z`).toISOString(); const responsable = dossierActif.owner_id; const opportunite = dossierActif.id; void executer({ type: "insert", table: "crm_taches", libelle: `Action « ${titre} »`, valeurs: { organisation_id: session.user.organisationId, opportunite_id: opportunite, responsable_id: responsable, createur_id: session.user.id, titre, echeance_at: echeance } }, "Action programmée.", "taches", () => { if (responsable === session.user.id) ajouterTacheLocale({ id: idLocal(), opportunite_id: opportunite, titre, echeance_at: echeance, notes: null }); }).then((success) => { if (success) formElement.reset(); }); }}><label className="field">Action<select name="titre" defaultValue="Rappeler">{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure (Abidjan)<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label><button className="primary-button" disabled={busy}>Ajouter au programme <ArrowRight size={17} /></button></form> : <p className="field-help">Attribuez d’abord ce dossier à un commercial depuis Loc Manager.</p>}
     </div></section></div>}
 
+    {reprogrammation && (() => {
+      const dossier = dossierParId.get(reprogrammation.opportunite_id);
+      const contact = dossier ? contactParId.get(dossier.contact_id)?.nom : null;
+      return <ReprogrammerAction key={reprogrammation.id} titre={reprogrammation.titre} contact={contact ?? "Dossier"}
+        echeance={reprogrammation.echeance_at} busy={busy} message={message}
+        onFermer={() => setReprogrammation(null)}
+        onValider={(echeance, motif) => void reprogrammerTache(reprogrammation, echeance, motif)} />;
+    })()}
     {completion && <div className="sheet-backdrop" onClick={() => setCompletion(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Terminer l’action" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>COMPTE RENDU</span><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{completion.titre}</h2><p>Notez le résultat et choisissez la suite. Tout sera conservé dans l’historique.</p>{message && <div className="toast" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void terminerTache(event)}><label className="field">Type d’échange<select name="type"><option value="appel">Appel</option><option value="visite">Visite</option><option value="rendez_vous">Rendez-vous</option><option value="message">Message</option><option value="note">Note</option></select></label><label className="field">Résultat<input name="resultat" required autoFocus placeholder="Ex. rendez-vous confirmé" /></label><label className="field">Note complémentaire<textarea name="notes" rows={2} placeholder="Facultatif" /></label><label className="field">Suite à donner<select name="decision" value={completionDecision} onChange={(event) => setCompletionDecision(event.target.value)}><option value="programmer">Programmer la prochaine action</option><option value="archiver">Archiver le dossier</option><option value="classer">Classer le dossier</option></select></label>{completionDecision === "programmer" && <><label className="field">Prochaine action<select name="prochaine_action" required>{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label></>}{completionDecision === "classer" && <label className="field">Classer à l’étape<select name="etape" value={completionEtape} onChange={(event) => setCompletionEtape(event.target.value)}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>}{completionDecision === "classer" && motifsPour(completionEtape) && <MotifField key={completionEtape} options={motifsPour(completionEtape)!} label={completionEtape === "perdu" ? "Pourquoi le dossier est-il perdu ?" : "Pourquoi le dossier est-il reporté ?"} />}{completionDecision === "archiver" && <><MotifField options={motifsPour(null, true)!} label="Pourquoi archiver ce dossier ?" /><p className="field-help">Les autres actions ouvertes de ce dossier seront annulées.</p></>}<button className="primary-button" disabled={busy}>Terminer l’action <Check size={18} /></button></form></div></section></div>}
 
     {creation && <div className="sheet-backdrop" onClick={() => setCreation(false)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Nouveau prospect" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCreation(false)} aria-label="Retour"><ArrowLeft size={20} /></button><span>NOUVEAU PROSPECT</span><button className="icon-button" onClick={() => setCreation(false)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><ProspectForm contacts={contacts} localites={localites} busy={busy} message={message} onClose={() => setCreation(false)} onSave={creerDossier} onSearchContacts={chercherContacts} manager={manager} agents={agents} /></div></section></div>}

@@ -1,5 +1,6 @@
 "use client";
 
+import { PERIODES_RAPIDES, libellePlage, periodeDe, plageRapide, type PeriodeRapide } from "../lib/periodes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -141,6 +142,8 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
 }) {
   const [debutPerformance, setDebutPerformance] = useState(monthAgo);
   const [finPerformance, setFinPerformance] = useState(today);
+  // Choix affiché dans la liste : deux périodes peuvent tomber sur les mêmes dates.
+  const [periodeChoisie, setPeriodeChoisie] = useState<PeriodeRapide | "personnalisee">(() => periodeDe({ debut: monthAgo(), fin: today() }));
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profils, setProfils] = useState<Profil[]>([]);
   const [eligibles, setEligibles] = useState<Eligible[]>([]);
@@ -291,14 +294,14 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
 
   function exporterAgents() {
     const lines = [
-      ["Agent", "Statut", "Zone", "Portefeuille", "Nouveaux", "Gagnés", "Perdus", "Actions faites", ...typesActions.map(([, title]) => title), "Actions en retard"],
-      ...agentsVisibles.map((agent) => [agent.nom, statutLibelle(agent), profils.find((profil) => profil.user_id === agent.user_id)?.zone ?? "", agent.portefeuille,
+      ["Du", "Au", "Agent", "Statut", "Zone", "Portefeuille", "Nouveaux", "Gagnés", "Perdus", "Actions faites", ...typesActions.map(([, title]) => title), "Actions en retard"],
+      ...agentsVisibles.map((agent) => [debutPerformance, finPerformance, agent.nom, statutLibelle(agent), profils.find((profil) => profil.user_id === agent.user_id)?.zone ?? "", agent.portefeuille,
         agent.nouveaux, agent.gagnes, agent.perdus, actionsFaites(agent), ...typesActions.map(([key]) => agent[key] ?? ""), agent.actions_en_retard]),
     ];
     const url = URL.createObjectURL(new Blob([`\ufeff${lines.map((line) => line.map(csvCell).join(";")).join("\r\n")}`], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `trabad-commercial-equipe-${today()}.csv`;
+    link.download = `trabad-commercial-performance-${debutPerformance}_${finPerformance}.csv`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -521,7 +524,17 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
     {message && <div className="toast manager-toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
 
     {mode === "performance" && <>
-      <div className="manager-period"><label>Du<input type="date" value={debutPerformance} max={finPerformance} onChange={(event) => setDebutPerformance(event.target.value)} /></label><label>Au<input type="date" value={finPerformance} min={debutPerformance} onChange={(event) => setFinPerformance(event.target.value)} /></label><button onClick={() => void chargerPerformance()} aria-label="Actualiser les performances" disabled={performanceBusy}><RefreshCw size={18} /></button></div>
+      <div className="manager-period-presets" role="group" aria-label="Période">
+        <label className="manager-period-select">Période<select value={periodeChoisie} onChange={(event) => {
+          const choix = event.target.value as PeriodeRapide | "personnalisee";
+          setPeriodeChoisie(choix);
+          if (choix === "personnalisee") return;
+          const plage = plageRapide(choix);
+          setDebutPerformance(plage.debut); setFinPerformance(plage.fin);
+        }}>{PERIODES_RAPIDES.map(([cle, titre]) => <option key={cle} value={cle}>{titre}</option>)}<option value="personnalisee">Personnalisée</option></select></label>
+        <span className="manager-period-label">{debutPerformance && finPerformance && debutPerformance <= finPerformance ? libellePlage({ debut: debutPerformance, fin: finPerformance }) : "Période invalide"}</span>
+      </div>
+      <div className="manager-period"><label>Du<input type="date" value={debutPerformance} max={finPerformance} onChange={(event) => { setDebutPerformance(event.target.value); setPeriodeChoisie("personnalisee"); }} /></label><label>Au<input type="date" value={finPerformance} min={debutPerformance} onChange={(event) => { setFinPerformance(event.target.value); setPeriodeChoisie("personnalisee"); }} /></label><button onClick={() => void chargerPerformance()} aria-label="Actualiser les performances" disabled={performanceBusy}><RefreshCw size={18} /></button></div>
       <CommercialDashboard client={client} organisationId={organisationId} debut={debutPerformance} fin={finPerformance} refreshKey={refreshKey}
         agents={[...agents].sort((a, b) => Number(agentActif(b)) - Number(agentActif(a)) || a.nom.localeCompare(b.nom, "fr")).map((agent) => ({ user_id: agent.user_id, nom: agentActif(agent) ? agent.nom : `${agent.nom} (inactif)` }))} />
       {inactifsAvecDossiers.length > 0 && <div className="warning" role="alert"><strong>{inactifsAvecDossiers.length} agent{inactifsAvecDossiers.length > 1 ? "s" : ""} inactif{inactifsAvecDossiers.length > 1 ? "s" : ""} détien{inactifsAvecDossiers.length > 1 ? "nent" : "t"} encore des dossiers :</strong> {inactifsAvecDossiers.map((agent) => `${agent.nom} (${agent.dossiers_total})`).join(", ")}. Transférez-les pour qu’ils continuent d’être suivis.</div>}
@@ -530,7 +543,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
         <details className="manager-filters"><summary className="manager-filter-title"><Filter size={15} /> Filtres {Number(!!rechercheAgent) + Number(statutAgent !== "tous") + Number(!!zoneAgent) > 0 && "actifs"}</summary><div className="manager-filter-grid"><label>Rechercher un agent<input value={rechercheAgent} onChange={(event) => setRechercheAgent(event.target.value)} placeholder="Nom de l’agent" /></label><label>Statut<select value={statutAgent} onChange={(event) => setStatutAgent(event.target.value)}><option value="tous">Tous</option><option value="actifs">Actifs</option><option value="inactifs">Inactifs</option></select></label><label>Zone<input value={zoneAgent} onChange={(event) => setZoneAgent(event.target.value)} placeholder="Ex. Cocody" /></label></div></details>
         <ColumnPicker options={teamColumns} visible={visibleTeamColumns} onChange={setVisibleTeamColumns} />
       </div>
-      <div className="manager-filter-actions"><button className="export-button" onClick={exporterAgents}><Download size={15} /> Exporter l’équipe</button><button className="export-button" onClick={() => setProfilEdit("nouveau")}>Ajouter un agent</button></div>
+      <div className="manager-filter-actions"><button className="export-button" onClick={exporterAgents}><Download size={15} /> Exporter les performances</button><button className="export-button" onClick={() => setProfilEdit("nouveau")}>Ajouter un agent</button></div>
       {performanceBusy && <p className="manager-muted">Actualisation des performances…</p>}
       {!performanceBusy && !performanceError && agents.length === 0 && <div className="empty"><Users size={26} /><strong>Aucun agent</strong><p>Créez les profils commerciaux depuis Loc Manager.</p></div>}
       <div className="manager-table-wrap"><table className="manager-table" style={{ minWidth: Math.max(360, visibleTeamColumns.length * 125 + 110) }}><thead><tr>{visibleTeamColumns.includes("agent") && <th>Agent</th>}{visibleTeamColumns.includes("statut") && <th>Statut</th>}{visibleTeamColumns.includes("zone") && <th>Zone</th>}{visibleTeamColumns.includes("portefeuille") && <th>Portefeuille</th>}{visibleTeamColumns.includes("nouveaux") && <th>Nouveaux</th>}{visibleTeamColumns.includes("gagnes") && <th>Gagnés</th>}{visibleTeamColumns.includes("perdus") && <th>Perdus</th>}{visibleTeamColumns.includes("actions") && <th>Actions faites</th>}{typesActions.map(([key, title]) => visibleTeamColumns.includes(key) && <th key={key}>{title}</th>)}{visibleTeamColumns.includes("retards") && <th>Retards</th>}<th>Actions</th></tr></thead><tbody>{agentsVisibles.map((agent) => <tr key={agent.user_id}>{visibleTeamColumns.includes("agent") && <td><strong>{agent.nom}</strong></td>}{visibleTeamColumns.includes("statut") && <td><span className={`agent-status ${agentActif(agent) ? "active" : ""}`}>{statutLibelle(agent)}</span>{!agentActif(agent) && agent.desactivation_motif && <small>{agent.desactivation_motif}</small>}{!agentActif(agent) && Number(agent.dossiers_total ?? 0) > 0 && <small className="late">{agent.dossiers_total} dossier{Number(agent.dossiers_total) > 1 ? "s" : ""} à transférer</small>}</td>}{visibleTeamColumns.includes("zone") && <td>{profils.find((profil) => profil.user_id === agent.user_id)?.zone || "—"}</td>}{visibleTeamColumns.includes("portefeuille") && <td>{agent.portefeuille}</td>}{visibleTeamColumns.includes("nouveaux") && <td>{agent.nouveaux}</td>}{visibleTeamColumns.includes("gagnes") && <td>{agent.gagnes}</td>}{visibleTeamColumns.includes("perdus") && <td>{agent.perdus}</td>}{visibleTeamColumns.includes("actions") && <td><strong>{actionsFaites(agent)}</strong></td>}{typesActions.map(([key]) => visibleTeamColumns.includes(key) && <td key={key}>{agent[key] ?? "—"}</td>)}{visibleTeamColumns.includes("retards") && <td>{agent.actions_en_retard}</td>}<td>{onOpenAgentDossiers && <button onClick={() => onOpenAgentDossiers(agent.user_id)}>Dossiers</button>}<button onClick={() => setProfilEdit(profils.find((profil) => profil.user_id === agent.user_id) ?? { user_id: agent.user_id, zone: null })}>Modifier</button>{actionsAgent(agent)}</td></tr>)}</tbody></table></div>
