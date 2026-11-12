@@ -6,7 +6,7 @@ import {
   ArrowLeft, ArrowRight, CalendarClock, Check, Crosshair, MapPin,
   Navigation, ShieldCheck, Sparkles,
 } from "lucide-react";
-import { actions, services, sources, typesBien, type Contact, type Localite, type ProspectPayload } from "../lib/crm";
+import { actions, erreurTelephone, services, sources, typesBien, type Contact, type Localite, type ProspectPayload } from "../lib/crm";
 
 const GpsMap = dynamic(() => import("./gps-map").then((module) => module.GpsMap), { ssr: false, loading: () => <div className="gps-map-loading">Chargement de la carte…</div> });
 
@@ -143,7 +143,7 @@ export function ProspectForm({ contacts, localites, busy, message, onClose, onSa
     {step === 1 ? <form className="flow-form" onSubmit={(event) => { event.preventDefault(); setStep(2); }}>
       <div className="flow-step-title"><span>01</span><div><strong>L’essentiel</strong><small>Qui rencontrez-vous, et où ?</small></div></div>
       <label className="field"><span>Nom du contact <b>*</b></span><input value={nom} onChange={(event) => setNom(event.target.value)} required minLength={2} autoFocus placeholder="Nom et prénom" autoComplete="name" /></label>
-      <label className="field">Téléphone<input value={telephone} onChange={(event) => { setTelephone(event.target.value); setContactId(""); }} type="tel" placeholder="Ex. 07 00 00 00 00" autoComplete="tel" inputMode="tel" /></label>
+      <label className="field">Téléphone<input value={telephone} onChange={(event) => { setTelephone(event.target.value); setContactId(""); event.currentTarget.setCustomValidity(erreurTelephone(event.target.value) ?? ""); }} type="tel" placeholder="Ex. 07 00 00 00 00" autoComplete="tel" inputMode="tel" /></label>
       {matches.length > 0 && <label className="field match">Contact déjà connu ?<select value={contactId} onChange={(event) => { const selected = matches.find((contact) => contact.id === event.target.value); setContactId(event.target.value); if (selected) { setNom(selected.nom); setOwnerId(selected.owner_id ?? ""); if (manager && (!selected.owner_id || !agents.some((agent) => agent.user_id === selected.owner_id))) setAction(""); } }}><option value="">Créer une nouvelle fiche</option>{matches.map((contact) => <option key={contact.id} value={contact.id}>{contact.nom} · {contact.telephone}</option>)}</select></label>}
       {rechercheContactEnCours && <p className="field-help" role="status">Vérification des contacts existants…</p>}
       {rechercheContactIndisponible && <p className="field-help" role="status">Vérification des doublons indisponible. Vérifiez le contact avant d’en créer un nouveau.</p>}

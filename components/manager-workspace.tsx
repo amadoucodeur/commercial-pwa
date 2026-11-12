@@ -7,7 +7,7 @@ import {
   ArrowLeft, ArrowRight, ArrowRightLeft, Check,
   Download, Filter, RefreshCw, Search, UserCheck, UserX, Users, X,
 } from "lucide-react";
-import { motifsDesactivation, motifsPour, motifsTransfert, services, sources, type Localite } from "../lib/crm";
+import { erreurTelephone, motifsDesactivation, motifsPour, motifsTransfert, services, sources, type Localite } from "../lib/crm";
 import { CommercialDashboard } from "./commercial-dashboard";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
@@ -590,7 +590,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
     </div></section></div>}
     {editing && <div className="sheet-backdrop" onClick={() => setEditing(null)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Modifier le dossier" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setEditing(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>MODIFIER LE DOSSIER</span><button className="icon-button" onClick={() => setEditing(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{editing.nom}</h2>{message && <div className="form-feedback" role="status">{message}</div>}<form key={editing.id} className="new-form" onSubmit={(event) => void enregistrerModification(event)}>
       <label className="field">Nom du contact<input name="nom" required minLength={2} defaultValue={editing.nom} /></label>
-      <label className="field">Téléphone<input name="telephone" type="tel" defaultValue={editing.telephone ?? ""} /></label>
+      <label className="field">Téléphone<input name="telephone" type="tel" defaultValue={editing.telephone ?? ""} onInput={(event) => event.currentTarget.setCustomValidity(erreurTelephone(event.currentTarget.value) ?? "")} /></label>
       <label className="field">Commune ou localité<select name="localite_id" defaultValue={editing.localite_id ?? ""}><option value="">Autre localisation</option>{localites.filter((item) => item.actif || item.id === editing.localite_id).map((item) => <option key={item.id} value={item.id} disabled={!item.actif}>{item.nom}{item.actif ? "" : " (désactivée)"}</option>)}</select></label>
       <label className="field">Localisation libre<input name="localisation" defaultValue={editing.localisation ?? ""} /></label>
       <label className="field">Rôle du contact<select name="role_contact" defaultValue={editing.role_contact ?? "inconnu"}><option value="inconnu">À préciser</option><option value="proprietaire">Propriétaire</option><option value="gerant">Gérant</option><option value="gardien">Gardien</option><option value="intermediaire">Intermédiaire</option></select></label>

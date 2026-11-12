@@ -98,3 +98,24 @@ export function motifsPour(etape: string | null, archiver = false): readonly str
   if (etape === "reporte") return motifsReport;
   return null;
 }
+
+/**
+ * Même règle que le déclencheur SQL crm_valider_telephone : null si le numéro est accepté,
+ * sinon le message à afficher. Un champ vide est accepté (contact sans numéro).
+ */
+export function erreurTelephone(valeur: string): string | null {
+  const texte = valeur.trim();
+  if (!texte) return null;
+  for (const numero of texte.split(/\s*[/;,]\s*|\s{2,}/)) {
+    if (!numero.trim()) continue;
+    let chiffres = numero.replace(/\D/g, "");
+    if (numero.trim().startsWith("+") && !chiffres.startsWith("225")) {
+      if (chiffres.length >= 8 && chiffres.length <= 15 && !/^(\d)\1+$/.test(chiffres)) continue;
+    } else {
+      chiffres = chiffres.replace(/^(00225|225)(\d{10})$/, "$2");
+      if (/^(01|05|07|21|25|27)\d{8}$/.test(chiffres) && !/^\d\d(\d)\1{7}$/.test(chiffres)) continue;
+    }
+    return `Numéro invalide : ${numero.trim()}. Un numéro ivoirien compte 10 chiffres et commence par 01, 05, 07, 21, 25 ou 27.`;
+  }
+  return null;
+}
