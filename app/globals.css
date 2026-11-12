@@ -589,6 +589,8 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .my-stats[open] > summary svg:last-child { transform: rotate(180deg); }
 .my-stats .cd { padding: 0 12px 14px; }
 .manager-workspace-performance .cd { margin: 6px 0 22px; }
+.my-stats .ca { margin: 0 12px 14px; }
+.manager-workspace-performance .ca { margin-top: 6px; }
 
 /* ——— Site vitrine ——— */
 .vt-workspace { display: grid; gap: 14px; min-width: 0; }

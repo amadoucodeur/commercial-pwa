@@ -15,6 +15,7 @@ import { ManagerLocalities } from "./manager-localities";
 import { ManagerWorkspace } from "./manager-workspace";
 import { DesktopDossierTable } from "./desktop-dossier-table";
 import { CommercialDashboard } from "./commercial-dashboard";
+import { CommercialActionsDetail } from "./commercial-actions-detail";
 import { ReprogrammerAction, noteReprogrammee } from "./reprogrammer-action";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
@@ -612,7 +613,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
           <div className="section-heading"><div><p className="eyebrow">VOS PRIORITÉS</p><h2>À faire</h2></div><button onClick={() => setVue("agenda")}>Tout voir <ArrowRight size={16} /></button></div>
           {[...retard, ...duJour, ...prochaines].slice(0, 3).map(carteTache)}
           {taches.length === 0 && <div className="empty"><CalendarDays size={26} /><strong>Programme à jour</strong><p>Vos prochaines actions apparaîtront ici.</p></div>}
-          {!manager && profilActif && enLigne && <details className="my-stats"><summary><TrendingUp size={18} /><span><strong>Mes indicateurs</strong><small>30 derniers jours : dossiers, actions, conversion</small></span><ChevronDown size={18} /></summary><CommercialDashboard client={client} organisationId={session.user.organisationId} debut={day(new Date(Date.now() - 29 * 86400000).toISOString())} fin={aujourdHui} equipe={false} /></details>}
+          {!manager && profilActif && enLigne && <details className="my-stats"><summary><TrendingUp size={18} /><span><strong>Mes indicateurs</strong><small>7 derniers jours : actions détaillées, dossiers, conversion</small></span><ChevronDown size={18} /></summary><CommercialActionsDetail client={client} organisationId={session.user.organisationId} debut={day(new Date(Date.now() - 6 * 86400000).toISOString())} fin={aujourdHui} equipe={false} onOuvrirDossier={(id) => setSelection(id)} /><CommercialDashboard client={client} organisationId={session.user.organisationId} debut={day(new Date(Date.now() - 6 * 86400000).toISOString())} fin={aujourdHui} equipe={false} /></details>}
         </>}
         {vue === "dossiers" && <>
           {manager && <div className="dossier-mode-switch" role="group" aria-label="Mode des dossiers"><button type="button" className={!gestionAvancee ? "active" : ""} aria-pressed={!gestionAvancee} onClick={() => setGestionAvancee(false)}>Vue rapide</button><button type="button" className={gestionAvancee ? "active" : ""} aria-pressed={gestionAvancee} onClick={() => { setAgentGestion(""); setGestionAvancee(true); }}>Gestion avancée</button></div>}

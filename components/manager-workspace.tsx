@@ -1,6 +1,6 @@
 "use client";
 
-import { PERIODES_RAPIDES, libellePlage, periodeDe, plageRapide, type PeriodeRapide } from "../lib/periodes";
+import { PERIODES_RAPIDES, libellePlage, plageRapide, type PeriodeRapide } from "../lib/periodes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { erreurTelephone, motifsDesactivation, motifsPour, motifsTransfert, services, sources, type Localite } from "../lib/crm";
 import { CommercialDashboard } from "./commercial-dashboard";
+import { CommercialActionsDetail } from "./commercial-actions-detail";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
 
@@ -113,11 +114,6 @@ function ColumnPicker<Column extends string>({ options, visible, onChange }: {
 }
 const label = (options: readonly (readonly [string, string])[], value: string) =>
   options.find(([key]) => key === value)?.[1] ?? value;
-const monthAgo = () => {
-  const date = new Date();
-  date.setDate(date.getDate() - 29);
-  return date.toISOString().slice(0, 10);
-};
 const today = () => new Date().toISOString().slice(0, 10);
 const dateLabel = (value: string) => new Intl.DateTimeFormat("fr-FR", {
   timeZone: "Africa/Abidjan", day: "numeric", month: "short", year: "numeric",
@@ -140,10 +136,11 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   initialAgent?: string;
   agentsDisponibles?: { user_id: string; nom: string; actif: boolean; profil_existant?: boolean }[];
 }) {
-  const [debutPerformance, setDebutPerformance] = useState(monthAgo);
-  const [finPerformance, setFinPerformance] = useState(today);
+  // Période par défaut : les 7 derniers jours.
+  const [debutPerformance, setDebutPerformance] = useState(() => plageRapide("7j").debut);
+  const [finPerformance, setFinPerformance] = useState(() => plageRapide("7j").fin);
   // Choix affiché dans la liste : deux périodes peuvent tomber sur les mêmes dates.
-  const [periodeChoisie, setPeriodeChoisie] = useState<PeriodeRapide | "personnalisee">(() => periodeDe({ debut: monthAgo(), fin: today() }));
+  const [periodeChoisie, setPeriodeChoisie] = useState<PeriodeRapide | "personnalisee">("7j");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profils, setProfils] = useState<Profil[]>([]);
   const [eligibles, setEligibles] = useState<Eligible[]>([]);
@@ -278,6 +275,8 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
   }, [chargerProspects, refreshKey, mode, filters.recherche]);
 
   const noms = useMemo(() => new Map(agents.map((agent) => [agent.user_id, agent.nom])), [agents]);
+  const agentsListe = useMemo(() => [...agents].sort((a, b) => Number(agentActif(b)) - Number(agentActif(a)) || a.nom.localeCompare(b.nom, "fr"))
+    .map((agent) => ({ user_id: agent.user_id, nom: agentActif(agent) ? agent.nom : `${agent.nom} (inactif)` })), [agents]);
   const agentsVisibles = agents.filter((agent) =>
     agent.nom.toLocaleLowerCase("fr-FR").includes(rechercheAgent.toLocaleLowerCase("fr-FR")) &&
     (statutAgent === "tous" || agentActif(agent) === (statutAgent === "actifs")) &&
@@ -535,8 +534,8 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
         <span className="manager-period-label">{debutPerformance && finPerformance && debutPerformance <= finPerformance ? libellePlage({ debut: debutPerformance, fin: finPerformance }) : "Période invalide"}</span>
       </div>
       <div className="manager-period"><label>Du<input type="date" value={debutPerformance} max={finPerformance} onChange={(event) => { setDebutPerformance(event.target.value); setPeriodeChoisie("personnalisee"); }} /></label><label>Au<input type="date" value={finPerformance} min={debutPerformance} onChange={(event) => { setFinPerformance(event.target.value); setPeriodeChoisie("personnalisee"); }} /></label><button onClick={() => void chargerPerformance()} aria-label="Actualiser les performances" disabled={performanceBusy}><RefreshCw size={18} /></button></div>
-      <CommercialDashboard client={client} organisationId={organisationId} debut={debutPerformance} fin={finPerformance} refreshKey={refreshKey}
-        agents={[...agents].sort((a, b) => Number(agentActif(b)) - Number(agentActif(a)) || a.nom.localeCompare(b.nom, "fr")).map((agent) => ({ user_id: agent.user_id, nom: agentActif(agent) ? agent.nom : `${agent.nom} (inactif)` }))} />
+      {debutPerformance && finPerformance && debutPerformance <= finPerformance && <CommercialActionsDetail client={client} organisationId={organisationId} debut={debutPerformance} fin={finPerformance} refreshKey={refreshKey} agents={agentsListe} />}
+      <CommercialDashboard client={client} organisationId={organisationId} debut={debutPerformance} fin={finPerformance} refreshKey={refreshKey} agents={agentsListe} />
       {inactifsAvecDossiers.length > 0 && <div className="warning" role="alert"><strong>{inactifsAvecDossiers.length} agent{inactifsAvecDossiers.length > 1 ? "s" : ""} inactif{inactifsAvecDossiers.length > 1 ? "s" : ""} détien{inactifsAvecDossiers.length > 1 ? "nent" : "t"} encore des dossiers :</strong> {inactifsAvecDossiers.map((agent) => `${agent.nom} (${agent.dossiers_total})`).join(", ")}. Transférez-les pour qu’ils continuent d’être suivis.</div>}
       <div className="manager-section-heading"><div><p className="eyebrow">L’ÉQUIPE</p><h2>Performance des agents</h2></div><span>{agentsVisibles.length} profil{agentsVisibles.length > 1 ? "s" : ""}</span></div>
       <div className="manager-controls">
