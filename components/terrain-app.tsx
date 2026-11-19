@@ -431,7 +431,12 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   };
 
   // `local` reflète tout de suite la modification à l'écran, qu'elle parte maintenant ou à la prochaine connexion.
+  // Verrou immédiat : un double clic ou un double « Entrée » ne doit jamais envoyer deux fois la même saisie,
+  // même si l'écran n'a pas encore grisé le bouton.
+  const envoiEnCours = useRef(false);
   async function executer(operation: OperationSansMeta, succes: string, scope: "crm" | "taches" | "none" = "crm", local?: () => void) {
+    if (envoiEnCours.current) return false;
+    envoiEnCours.current = true;
     setBusy(true);
     setMessage("");
     const mettreEnAttente = () => {
@@ -454,7 +459,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       setMessage(error && typeof error === "object" && "message" in error
         ? String(error.message) : "L’opération a échoué.");
       return false;
-    } finally { setBusy(false); }
+    } finally { envoiEnCours.current = false; setBusy(false); }
   }
 
   const ajouterTacheLocale = (tache: Tache) =>
