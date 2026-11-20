@@ -30,7 +30,7 @@ const libelles: Record<string, string> = {
   manuel: "Saisie manuelle", terrain: "Terrain", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn", ads: "Publicité en ligne",
   whatsapp: "WhatsApp", site: "Site web", recommandation: "Recommandation", appel: "Appel entrant", autre: "Autre",
   gestion_locative: "Gestion locative", vente: "Vente", location: "Location", construction: "Construction",
-  rehabilitation: "Réhabilitation", assistance_juridique: "Assistance juridique", information: "Information",
+  rehabilitation: "Réhabilitation", assistance_juridique: "Assistance juridique", partenaire: "Partenaire", information: "Information",
 };
 const ordreEtapes = ["nouveau", "contacte", "rdv", "proposition", "negociation", "reporte", "gagne", "perdu"];
 const nombre = (value: number) => new Intl.NumberFormat("fr-FR", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);

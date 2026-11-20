@@ -17,6 +17,7 @@ import { DesktopDossierTable } from "./desktop-dossier-table";
 import { CommercialDashboard } from "./commercial-dashboard";
 import { CommercialActionsDetail } from "./commercial-actions-detail";
 import { ReprogrammerAction, noteReprogrammee } from "./reprogrammer-action";
+import { ContactsDossier } from "./contacts-dossier";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
 import { VitrineWorkspace } from "./vitrine-workspace";
@@ -662,6 +663,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       <div className="detail-chips"><span className="stage" data-stage={dossierActif.etape}>{label(etapes, dossierActif.etape)}</span>{dossierActif.localite_id && <span className="place-chip"><MapPin size={13} /> {localiteParId.get(dossierActif.localite_id)?.nom ?? contactActif?.localisation}</span>}</div>
       <div className="detail-block"><small>QUALIFICATION</small><p>Source : {label(sources, dossierActif.source)} · Température : {label([["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]], dossierActif.temperature ?? "À qualifier")}</p></div>
       {contactActif?.telephone && <a className="call-button" href={`tel:${contactActif.telephone}`}><Phone size={18} /> Appeler {contactActif.telephone}</a>}
+      {!dossierLocal && <div className="detail-block"><ContactsDossier client={client} dossierId={dossierActif.id} modifiable={!!dossierActif.owner_id} refreshKey={historiqueVersion} /></div>}
       {dossierActif.besoin && <div className="detail-block"><small>BESOIN EXPRIMÉ</small><p>{dossierActif.besoin}</p></div>}
       {(dossierActif.type_bien || dossierActif.adresse_bien) && <div className="detail-block"><small>BIEN CONCERNÉ</small><p>{[dossierActif.type_bien, dossierActif.adresse_bien].filter(Boolean).join(" · ")}</p></div>}
       <div className="detail-block"><small>POSITION GPS</small>{dossierActif.gps_latitude !== null && dossierActif.gps_longitude !== null ? <p><a className="map-link" href={`https://www.google.com/maps?q=${dossierActif.gps_latitude},${dossierActif.gps_longitude}`} target="_blank" rel="noopener noreferrer"><MapPinned size={16} /> Ouvrir sur la carte ↗</a></p> : <p>Non renseignée</p>}{!dossierLocal && <button className="text-action" onClick={() => ajouterGps(dossierActif)}><Crosshair size={15} /> {dossierActif.gps_latitude === null ? "Ajouter ma position" : "Actualiser la position"}</button>}</div>

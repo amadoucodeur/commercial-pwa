@@ -44,6 +44,7 @@ export const services = [
   ["construction", "Construction"],
   ["rehabilitation", "Réhabilitation"],
   ["assistance_juridique", "Assistance juridique"],
+  ["partenaire", "Partenaire"],
   ["autre", "Autre"],
 ] as const;
 

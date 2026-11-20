@@ -11,6 +11,7 @@ import { erreurTelephone, motifsDesactivation, motifsPour, motifsTransfert, serv
 import { CommercialDashboard } from "./commercial-dashboard";
 import { CommercialActionsDetail } from "./commercial-actions-detail";
 import { DossierHistory } from "./dossier-history";
+import { ContactsDossier } from "./contacts-dossier";
 import { MotifField, lireMotif } from "./motif-field";
 
 type Agent = {
@@ -583,6 +584,7 @@ export function ManagerWorkspace({ client, organisationId, refreshKey, onCreate,
       {selected.telephone && <a className="call-button" href={`tel:${selected.telephone}`}>Appeler {selected.telephone}</a>}
       <div className="detail-block"><small>FICHE</small><p>{selected.localisation || "Lieu non précisé"} · Créé le {dateLabel(selected.created_at)}</p></div>
       <div className="detail-block"><small>SUIVI</small><p>Agent : {noms.get(selected.owner_id ?? "") ?? "Non attribué"} · Étape : {selected.archived_at ? "Archivé" : label(etapes, selected.etape)} · Température : {selected.temperature ? label(temperatures, selected.temperature) : "Non qualifié"}</p></div>
+      <div className="detail-block"><ContactsDossier client={client} dossierId={selected.id} modifiable={!selected.archived_at} /></div>
       {selected.besoin && <div className="detail-block"><small>BESOIN</small><p>{selected.besoin}</p></div>}
       <div className="detail-block"><small>HISTORIQUE COMPLET DU DOSSIER</small><DossierHistory client={client} dossierId={selected.id} /></div>
       <button className="primary-button" onClick={() => void ouvrirEdition(selected)}>Modifier le dossier <ArrowRight size={17} /></button>
