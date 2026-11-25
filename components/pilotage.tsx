@@ -92,6 +92,14 @@ async function toutesLesPages<T>(requete: (de: number, a: number) => PromiseLike
 }
 
 type Onglet = "priorite" | "chaleur";
+type Blocage = "nonAppeles" | "retard" | "endormis" | "sansSuite";
+type Ton = "vert" | "orange" | "rouge" | "neutre";
+const VOYANTS: Record<Ton, string> = { vert: "Bon", orange: "À surveiller", rouge: "Préoccupant", neutre: "—" };
+const PAR_BLOCAGE = 30;
+/** « +12 % » par rapport à la période précédente ; rien si elle était vide. */
+const evolution = (valeur: number, avant: number) => avant ? `${valeur >= avant ? "+" : "−"}${Math.abs(Math.round(((valeur - avant) / avant) * 100))} %` : "";
+const duree = (ms: number) => ms < 3_600_000 ? "moins d’1 h" : ms < JOUR ? `${Math.round(ms / 3_600_000)} h` : `${Math.round(ms / JOUR)} j`;
+const pluriel = (n: number, un: string, plusieurs = `${un}s`) => `${nombre(n)} ${n > 1 ? plusieurs : un}`;
 const ACTIVITES: Record<string, string> = { appel: "Appel", visite: "Visite", rendez_vous: "Rendez-vous", message: "Message", note: "Note" };
 const SERVICES: Record<string, string> = {
   gestion_locative: "Gestion locative", location: "Location", vente: "Vente", achat: "Achat", syndic: "Syndic", partenaire: "Partenaire",
@@ -112,6 +120,8 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
   const [chargement, setChargement] = useState(true);
   const [choisis, setChoisis] = useState<string[]>([]);
   const [onglet, setOnglet] = useState<Onglet>("priorite");
+  // Blocage déplié dans la vue direction : la liste des dossiers concernés.
+  const [blocage, setBlocage] = useState<Blocage | null>(null);
   // Fenêtre de lecture d'un dossier ; fiches chargées à la demande et gardées.
   const [ouvert, setOuvert] = useState<string | null>(null);
   const [fiches, setFiches] = useState<Map<string, Fiche | "erreur">>(new Map());
@@ -219,6 +229,37 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       repartition: CHALEURS.map((c) => ({ ...c, n: actifs.filter((x) => (x.temperature ?? "non_qualifie") === c.cle).length })),
       agents: new Set(actifs.map((x) => x.owner_id).filter(Boolean)).size,
       endormis: actifs.filter((x) => endormis.has(x.id)).length,
+      perdusPrec: dossiers.filter((x) => x.etape === "perdu" && precedente(x.cloture_at)).length,
+    };
+
+    // ── Vue direction : le nouveau, les évolutions, les blocages. ───────────────────────────────
+    // Délai du premier contact des nouveaux (premier échange noté après la création).
+    const premierContact = new Map<string, number>();
+    for (const e of donnees.echanges) {
+      const dossier = dossierParId.get(e.opportunite_id);
+      const quandEchange = t(e.effectuee_at);
+      if (!dossier || quandEchange < t(dossier.created_at)) continue;
+      const avant = premierContact.get(dossier.id);
+      if (avant === undefined || quandEchange < avant) premierContact.set(dossier.id, quandEchange);
+    }
+    const delais = nouveaux.filter((x) => premierContact.has(x.id)).map((x) => premierContact.get(x.id)! - t(x.created_at)).sort((a, b) => a - b);
+    const parSource = new Map<string, number>();
+    for (const x of nouveaux) parSource.set(x.source, (parSource.get(x.source) ?? 0) + 1);
+    const nonAppeles = nouveaux.filter((x) => !contactes(x)).sort((a, b) => t(a.created_at) - t(b.created_at));
+    const endormisListe = actifs.filter((x) => endormis.has(x.id)).sort((a, b) => (endormis.get(b.id) ?? 0) - (endormis.get(a.id) ?? 0));
+    const endormisParEtape = Object.keys(DELAIS_ETAPE)
+      .map((etape) => ({ etape, n: endormisListe.filter((x) => x.etape === etape).length }))
+      .filter((x) => x.n).sort((a, b) => b.n - a.n);
+    const retardsParAgent = new Map<string, number>();
+    for (const x of retard) retardsParAgent.set(x.responsable_id, (retardsParAgent.get(x.responsable_id) ?? 0) + 1);
+    const direction = {
+      delaiMedian: delais.length ? delais[Math.floor(delais.length / 2)] : null,
+      sources: [...parSource].sort((a, b) => b[1] - a[1]).slice(0, 3),
+      nonAppeles,
+      endormisListe,
+      endormisParEtape,
+      sansSuite: actifs.filter((x) => !tachesOuvertes.has(x.id)),
+      retardsParAgent: [...retardsParAgent].sort((a, b) => b[1] - a[1]),
     };
 
     // Priorité : actions ouvertes par échéance ; dossiers actifs sans action à part.
@@ -265,7 +306,7 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       };
     }).filter((l) => l.agent.actif || l.actions || l.portefeuille);
 
-    return { indicateurs, priorite, parChaleur, listeNouveaux, lignes, tachesOuvertes, dernierEchange, dossierParId, endormis };
+    return { indicateurs, priorite, parChaleur, listeNouveaux, lignes, tachesOuvertes, dernierEchange, dossierParId, endormis, direction };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [donnees, bornes, selection, agents, maintenant]);
 
@@ -281,8 +322,11 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
     } else if (onglet === "chaleur") {
       Object.values(vue.parChaleur).forEach((liste) => liste.slice(0, PAR_COLONNE).forEach((x) => ids.add(x.contact_id)));
     }
+    if (blocage === "retard") vue.priorite.retard.slice(0, PAR_BLOCAGE).forEach((x) => ajouterDossier(x.opportunite_id));
+    else if (blocage) ({ nonAppeles: vue.direction.nonAppeles, endormis: vue.direction.endormisListe, sansSuite: vue.direction.sansSuite })[blocage]
+      .slice(0, PAR_BLOCAGE).forEach((x) => ids.add(x.contact_id));
     return [...ids];
-  }, [vue, onglet]);
+  }, [vue, onglet, blocage]);
 
   useEffect(() => {
     const manquants = idsAffiches.filter((id) => !contacts.has(id));
@@ -345,6 +389,22 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       })}
     </div>}
 
+    {/* Vue direction : l'essentiel en phrases, puis le nouveau, les évolutions et les blocages. */}
+    <Direction k={k} d={vue.direction} periode={periode} qui={!selection.size ? (equipe ? "l’équipe" : "vous") : selection.size === 1 ? nomAgent.get(choisis[0]) ?? "l’agent" : "les agents sélectionnés"}
+      equipe={equipe} nomAgent={nomAgent} blocage={blocage} onBlocage={(b) => setBlocage((avant) => avant === b ? null : b)} />
+    {blocage && <div className="pl-bloc pl-blocage-liste">
+      <div className="pl-tableau-tete">
+        <div><h3>{({ nonAppeles: "Nouveaux pas encore appelés", retard: "Actions en retard", endormis: "Dossiers endormis", sansSuite: "Dossiers sans prochaine action" } as const)[blocage]}</h3><p>Les plus urgents d’abord. Touchez une carte pour lire le dossier.</p></div>
+        <button type="button" className="pl-fermer" onClick={() => setBlocage(null)} aria-label="Fermer la liste"><X size={16} /></button>
+      </div>
+      <div className="pl-blocage-cartes">
+        {blocage === "retard" ? vue.priorite.retard.slice(0, PAR_BLOCAGE).map((x) => carteAction(x, true))
+          : blocage === "nonAppeles" ? vue.direction.nonAppeles.slice(0, PAR_BLOCAGE).map((x) => carteDossier(x, `Pas encore appelé · créé ${quand(x.created_at, maintenant)}`, true))
+            : blocage === "endormis" ? vue.direction.endormisListe.slice(0, PAR_BLOCAGE).map((x) => carteDossier(x, `${ETAPES[x.etape] ?? x.etape} · ${vue.endormis.get(x.id)} j sans contact`, true))
+              : vue.direction.sansSuite.slice(0, PAR_BLOCAGE).map((x) => carteDossier(x, vue.dernierEchange.get(x.id) ? `Dernier échange ${quand(vue.dernierEchange.get(x.id)!, maintenant)}` : "Aucune action prévue", true))}
+      </div>
+    </div>}
+
     {/* Synthèse : le portefeuille en un chiffre et une barre, puis 4 chiffres d'activité. */}
     <div className="pl-synthese">
       <div className="pl-bloc pl-portefeuille">
@@ -401,6 +461,105 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       agent={agentDe(dossierOuvert?.owner_id ?? null)} fiche={fiches.get(ouvert)} prochaine={vue.tachesOuvertes.get(ouvert)}
       nomAgent={nomAgent} maintenant={maintenant} endormi={vue.endormis.get(ouvert)} onFermer={() => setOuvert(null)} onReessayer={() => void ouvrir(ouvert)} />}
   </section>;
+}
+
+type Indicateurs = {
+  actions: number; actionsPrec: number; retard: number; nouveaux: number; nouveauxPrec: number; nonContactes: number;
+  gagnes: number; perdus: number; gagnesPrec: number; perdusPrec: number; chauds: number; sansAction: number; actifs: number; endormis: number;
+};
+type VueDirection = {
+  delaiMedian: number | null; sources: [string, number][]; nonAppeles: Dossier[]; endormisListe: Dossier[];
+  endormisParEtape: { etape: string; n: number }[]; sansSuite: Dossier[]; retardsParAgent: [string, number][];
+};
+
+/** Lecture direction : une phrase, trois blocs avec un voyant, chaque blocage ouvre la liste des dossiers. */
+function Direction({ k, d, periode, qui, equipe, nomAgent, blocage, onBlocage }: {
+  k: Indicateurs; d: VueDirection; periode: string; qui: string; equipe: boolean;
+  nomAgent: Map<string, string>; blocage: Blocage | null; onBlocage: (b: Blocage) => void;
+}) {
+  const debutPhrase = periode.endsWith("derniers jours") ? `Sur les ${periode}` : periode.charAt(0).toUpperCase() + periode.slice(1);
+  const evoActions = evolution(k.actions, k.actionsPrec);
+  const premierRetard = equipe ? d.retardsParAgent[0] : undefined;
+  const partContactes = k.nouveaux ? (k.nouveaux - k.nonContactes) / k.nouveaux : null;
+  const tonNouveau: Ton = partContactes === null ? "neutre" : partContactes >= 0.8 ? "vert" : partContactes >= 0.5 ? "orange" : "rouge";
+  const ratio = k.actionsPrec ? k.actions / k.actionsPrec : k.actions ? 1 : 0;
+  const tonEvolution: Ton = !k.actions && !k.actionsPrec ? "neutre" : ratio >= 0.9 ? "vert" : ratio >= 0.7 ? "orange" : "rouge";
+  const partEndormis = k.actifs ? k.endormis / k.actifs : 0;
+  const tonBlocages: Ton = !k.retard && partEndormis <= 0.1 ? "vert" : partEndormis <= 0.25 && k.retard <= Math.max(3, k.actifs * 0.1) ? "orange" : "rouge";
+  const surveiller = [
+    k.retard ? `${pluriel(k.retard, "action")} en retard${premierRetard && premierRetard[1] > 1 ? `, dont ${premierRetard[1]} chez ${nomAgent.get(premierRetard[0]) ?? "un agent"}` : ""}` : null,
+    k.nonContactes ? `${pluriel(k.nonContactes, "nouveau prospect", "nouveaux prospects")} pas encore appelé${k.nonContactes > 1 ? "s" : ""}` : null,
+    k.endormis ? pluriel(k.endormis, "dossier endormi", "dossiers endormis") : null,
+  ].filter(Boolean);
+
+  const lignesEvolution = [
+    { titre: "Actions menées", v: k.actions, avant: k.actionsPrec, bonSens: 1 },
+    { titre: "Nouveaux prospects", v: k.nouveaux, avant: k.nouveauxPrec, bonSens: 1 },
+    { titre: "Dossiers gagnés", v: k.gagnes, avant: k.gagnesPrec, bonSens: 1 },
+    { titre: "Dossiers perdus", v: k.perdus, avant: k.perdusPrec, bonSens: -1 },
+  ];
+  const blocages: { cle: Blocage; n: number; titre: string; detail: string; vide: string }[] = [
+    { cle: "nonAppeles", n: k.nonContactes, titre: pluriel(k.nonContactes, "nouveau pas encore appelé", "nouveaux pas encore appelés"),
+      detail: d.nonAppeles[0] ? `le plus ancien attend depuis ${duree(Date.now() - Date.parse(d.nonAppeles[0].created_at))}` : "", vide: "Tous les nouveaux ont été appelés" },
+    { cle: "retard", n: k.retard, titre: pluriel(k.retard, "action en retard", "actions en retard"),
+      detail: equipe ? d.retardsParAgent.slice(0, 2).map(([id, n]) => `${nomAgent.get(id) ?? "Agent"} ${n}`).join(" · ") : "", vide: "Aucune action en retard" },
+    { cle: "endormis", n: k.endormis, titre: pluriel(k.endormis, "dossier endormi", "dossiers endormis"),
+      detail: d.endormisParEtape.slice(0, 2).map(({ etape, n }) => `${n} en ${ETAPES[etape] ?? etape}`).join(" · "), vide: "Aucun dossier endormi" },
+    { cle: "sansSuite", n: d.sansSuite.length, titre: pluriel(d.sansSuite.length, "dossier sans prochaine action", "dossiers sans prochaine action"), detail: "", vide: "Chaque dossier a sa prochaine action" },
+  ];
+
+  return <>
+    <div className="pl-bloc pl-resume">
+      <p className="pl-surtitre">L’essentiel</p>
+      <p className="pl-resume-texte">
+        {debutPhrase}, {qui} {qui === "vous" ? "avez" : qui.startsWith("les ") ? "ont" : "a"} mené <strong>{pluriel(k.actions, "action")}</strong>{evoActions && <> ({evoActions} par rapport à la période précédente)</>} et reçu <strong>{pluriel(k.nouveaux, "nouveau prospect", "nouveaux prospects")}</strong>.
+        {" "}<strong>{pluriel(k.gagnes, "dossier gagné", "dossiers gagnés")}</strong>, {pluriel(k.perdus, "perdu")}.
+      </p>
+      <p className={`pl-resume-texte pl-resume-alerte${surveiller.length ? "" : " pl-vert"}`}>
+        {surveiller.length ? <><strong>À surveiller :</strong> {surveiller.join(" ; ")}.</> : "Rien de bloquant : chaque dossier est suivi."}
+      </p>
+    </div>
+    <div className="pl-trois">
+      <section className="pl-bloc pl-axe">
+        <header><h3>Le nouveau</h3><Voyant ton={tonNouveau} /></header>
+        <p className="pl-axe-chiffre"><strong>{nombre(k.nouveaux)}</strong> nouveau{k.nouveaux > 1 ? "x" : ""} prospect{k.nouveaux > 1 ? "s" : ""}<span className="pl-portee">{periode}</span></p>
+        <ul className="pl-axe-lignes">
+          <li><span>Déjà appelés</span><strong>{partContactes === null ? "—" : `${nombre(k.nouveaux - k.nonContactes)} (${pourcent(partContactes)})`}</strong></li>
+          <li><span>Premier appel en</span><strong>{d.delaiMedian === null ? "—" : duree(d.delaiMedian)}</strong></li>
+          <li><span>Viennent de</span><strong>{d.sources.length ? d.sources.map(([source, n]) => `${SOURCES[source] ?? source} ${n}`).join(" · ") : "—"}</strong></li>
+        </ul>
+      </section>
+      <section className="pl-bloc pl-axe">
+        <header><h3>Les évolutions</h3><Voyant ton={tonEvolution} /></header>
+        <p className="pl-axe-sous">Par rapport à la période précédente de même durée</p>
+        <ul className="pl-axe-lignes">
+          {lignesEvolution.map((l) => {
+            const ecart = l.v - l.avant;
+            const bon = ecart * l.bonSens > 0;
+            return <li key={l.titre}><span>{l.titre}</span><strong>{nombre(l.v)}
+              {ecart !== 0 && <em className={bon ? "pl-vert" : "pl-rouge"}>{ecart > 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{evolution(l.v, l.avant) || `${ecart > 0 ? "+" : ""}${ecart}`}</em>}
+              <small>avant {nombre(l.avant)}</small></strong></li>;
+          })}
+        </ul>
+      </section>
+      <section className="pl-bloc pl-axe">
+        <header><h3>Les blocages</h3><Voyant ton={tonBlocages} /></header>
+        <p className="pl-axe-sous">État actuel · touchez une ligne pour voir les dossiers</p>
+        <ul className="pl-axe-blocages">
+          {blocages.map((b) => <li key={b.cle}>
+            <button type="button" disabled={!b.n} aria-expanded={blocage === b.cle} className={b.n ? "" : "pl-ok"} onClick={() => onBlocage(b.cle)}>
+              <span><strong>{b.n ? b.titre : b.vide}</strong>{b.n && b.detail ? <small>{b.detail}</small> : null}</span>
+              {b.n ? <span className="pl-voir">{blocage === b.cle ? "Masquer" : "Voir"}</span> : <span className="pl-vert">✓</span>}
+            </button>
+          </li>)}
+        </ul>
+      </section>
+    </div>
+  </>;
+}
+
+function Voyant({ ton }: { ton: Ton }) {
+  return <span className={`pl-voyant pl-voyant-${ton}`}><span aria-hidden="true" />{VOYANTS[ton]}</span>;
 }
 
 function Tuile({ titre, portee, valeur, precedent, Icone, aide, sous, alerte = false, sousTon }: {
@@ -613,6 +772,40 @@ const styles = `
 .pl-tuile { padding: 14px; }
 .pl-tuile-titre { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: var(--pl-gris); font-size: 12px; font-weight: 600; }
 .pl-tuile-titre svg { color: #94a3b8; }
+.pl-resume { display: grid; gap: 6px; padding: 16px 18px; border-left: 4px solid var(--pl-teal); }
+.pl-resume-texte { color: #1e293b; font-size: 15px; line-height: 1.55; }
+.pl-resume-texte strong { color: var(--pl-encre); }
+.pl-resume-alerte { color: #9f1239; font-size: 14px; }
+.pl-trois { display: grid; gap: 12px; }
+@media (min-width: 1024px) { .pl-trois { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.pl-axe { display: grid; align-content: start; gap: 8px; padding: 14px 16px; }
+.pl-axe header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pl-axe h3 { color: var(--pl-encre); font-size: 15px; }
+.pl-axe-chiffre { color: var(--pl-gris); font-size: 13px; }
+.pl-axe-chiffre strong { margin-right: 4px; color: var(--pl-encre); font-size: 26px; font-variant-numeric: tabular-nums; }
+.pl-axe-sous { color: #94a3b8; font-size: 11px; }
+.pl-axe-lignes { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.pl-axe-lignes li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid #f1f5f9; font-size: 13px; }
+.pl-axe-lignes li > span { color: var(--pl-gris); }
+.pl-axe-lignes strong { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; gap: 6px; color: var(--pl-encre); text-align: right; font-variant-numeric: tabular-nums; }
+.pl-axe-lignes em { display: inline-flex; align-items: center; font-size: 12px; font-style: normal; }
+.pl-axe-lignes small { color: #94a3b8; font-size: 11px; font-weight: 500; }
+.pl-axe-blocages { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.pl-axe-blocages button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 11px; border: 1px solid #fecdd3; border-radius: 10px; background: #fff1f2; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pl-axe-blocages button[aria-expanded="true"] { border-color: #be123c; }
+.pl-axe-blocages button.pl-ok { border-color: #d1fae5; background: #f0fdf4; cursor: default; }
+.pl-axe-blocages button > span:first-child { display: grid; gap: 1px; min-width: 0; }
+.pl-axe-blocages strong { color: var(--pl-encre); font-size: 13px; }
+.pl-axe-blocages small { color: var(--pl-gris); font-size: 11px; overflow-wrap: anywhere; }
+.pl-voir { flex-shrink: 0; color: #be123c; font-size: 12px; font-weight: 700; }
+.pl-voyant { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 99px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.pl-voyant > span { width: 8px; height: 8px; border-radius: 99px; background: currentColor; }
+.pl-voyant-vert { background: #dcfce7; color: #047857; }
+.pl-voyant-orange { background: #fef3c7; color: #b45309; }
+.pl-voyant-rouge { background: #ffe4e6; color: #be123c; }
+.pl-voyant-neutre { background: #f1f5f9; color: #64748b; }
+.pl-blocage-liste { overflow: hidden; }
+.pl-blocage-cartes { display: grid; gap: 8px; max-height: 480px; padding: 12px; overflow-y: auto; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); background: #f8fafc99; }
 .pl-tuile-portee { margin-top: 1px !important; color: #94a3b8; font-size: 11px; }
 .pl-portee { margin-left: 6px; padding: 1px 7px; border-radius: 99px; background: #f1f5f9; color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; vertical-align: middle; }
 .pl-colonne-tete h4 small { display: block; color: #94a3b8; font-size: 11px; font-weight: 500; }
