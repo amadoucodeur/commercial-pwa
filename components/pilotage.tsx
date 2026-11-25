@@ -407,6 +407,19 @@ function Carte({ contact, dossier, titre, ligne, alerte, agent, onOuvrir }: {
 }
 
 /** Fenêtre de lecture d'un dossier : panneau à droite sur grand écran, feuille du bas sur téléphone. */
+/** Les échanges importés du tableur gardent la ligne brute (JSON) : on affiche seulement sa provenance. */
+function texteEchange(notes: string | null | undefined) {
+  const texte = notes?.trim();
+  if (!texte || !texte.startsWith("{")) return texte || "";
+  try {
+    const brut = JSON.parse(texte) as { sheet?: unknown; row?: unknown };
+    if (brut && typeof brut === "object" && ("sheet" in brut || "row" in brut)) {
+      return `Importé du tableur${brut.sheet ? ` « ${String(brut.sheet)} »` : ""}${brut.row ? `, ligne ${String(brut.row)}` : ""}.`;
+    }
+  } catch { /* texte ordinaire */ }
+  return texte;
+}
+
 function FenetreDossier({ dossier, contact, agent, fiche, prochaine, nomAgent, maintenant, onFermer, onReessayer }: {
   dossier?: Dossier; contact: string; agent?: string; fiche?: Fiche | "erreur"; prochaine?: Tache;
   nomAgent: Map<string, string>; maintenant: number; onFermer: () => void; onReessayer: () => void;
@@ -459,7 +472,7 @@ function FenetreDossier({ dossier, contact, agent, fiche, prochaine, nomAgent, m
               {fiche.echanges.length === 0 ? <p className="pl-vide">Aucun échange enregistré.</p>
                 : <ol className="pl-echanges">{fiche.echanges.map((e) => <li key={e.id}>
                   <p><strong>{ACTIVITES[e.type_activite] ?? e.type_activite}</strong> · {quand(e.effectuee_at, maintenant)}{e.auteur_id && nomAgent.get(e.auteur_id) ? ` · ${nomAgent.get(e.auteur_id)}` : ""}</p>
-                  {(e.resultat || e.notes) && <p className="pl-echange-texte">{[e.resultat, e.notes].filter(Boolean).join(" — ")}</p>}
+                  {(e.resultat || e.notes) && <p className="pl-echange-texte">{[e.resultat, texteEchange(e.notes)].filter(Boolean).join(" — ")}</p>}
                 </li>)}</ol>}
             </>}
       </div>
@@ -598,7 +611,7 @@ const styles = `
 .pl-p-chaud { background: #ffe4e6; color: #be123c; } .pl-p-tiede { background: #fef3c7; color: #b45309; } .pl-p-froid { background: #e0f2fe; color: #0369a1; } .pl-p-non_qualifie { background: #f1f5f9; color: #475569; }
 
 .pl-fond { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end; background: #0f172a66; animation: pl-apparait .15s ease-out; }
-.pl-fenetre { display: flex; flex-direction: column; width: min(460px, 100%); height: 100%; background: #fff; box-shadow: -12px 0 32px #0f172a2e; animation: pl-glisse .2s ease-out; }
+.pl-fenetre { display: flex; min-width: 0; overflow: hidden; flex-direction: column; width: min(460px, 100%); height: 100%; background: #fff; box-shadow: -12px 0 32px #0f172a2e; animation: pl-glisse .2s ease-out; }
 @media (max-width: 640px) {
   .pl-fond { align-items: flex-end; }
   .pl-fenetre { width: 100%; height: auto; max-height: 88dvh; border-radius: 20px 20px 0 0; animation-name: pl-monte; }
@@ -611,7 +624,7 @@ const styles = `
 .pl-fenetre-tete h3 { color: var(--pl-encre); font-size: 19px; }
 .pl-fenetre-tete p { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px !important; color: var(--pl-gris); font-size: 12px; }
 .pl-fermer { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border: 1px solid var(--pl-ligne); border-radius: 10px; background: #fff; color: #475569; cursor: pointer; }
-.pl-fenetre-corps { display: grid; gap: 14px; padding: 16px 18px max(20px, env(safe-area-inset-bottom)); overflow-y: auto; }
+.pl-fenetre-corps { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; overflow-x: hidden; padding: 16px 18px max(20px, env(safe-area-inset-bottom)); overflow-y: auto; }
 .pl-prochaine { display: grid; gap: 2px; padding: 12px 14px; border-radius: 12px; background: #f0fdfa; }
 .pl-prochaine small { color: var(--pl-teal); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 .pl-prochaine strong { color: var(--pl-encre); }
@@ -628,7 +641,8 @@ const styles = `
 .pl-echanges { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .pl-echanges li { padding: 9px 11px; border-left: 3px solid #cbd5e1; border-radius: 0 10px 10px 0; background: var(--pl-fond); font-size: 12px; }
 .pl-echanges strong { color: var(--pl-encre); }
-.pl-echange-texte { margin-top: 3px !important; color: #1e293b; }
+.pl-echange-texte { margin-top: 3px !important; color: #1e293b; white-space: pre-line; overflow-wrap: anywhere; }
+.pl-fenetre-corps > *, .pl-echanges li, .pl-prochaine > * { min-width: 0; overflow-wrap: anywhere; }
 
 .pl-equipe { overflow: hidden; }
 .pl-defile { overflow-x: auto; }
