@@ -577,14 +577,17 @@ const styles = `
 .pl-colonne-tete { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; }
 .pl-colonne-tete h4 { color: var(--pl-encre); font-size: 13px; }
 .pl-colonne-tete span { padding: 1px 8px; border-radius: 99px; background: #f1f5f9; color: #334155; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.pl-colonne-corps { display: flex; flex-direction: column; gap: 8px; max-height: 520px; padding: 0 8px 8px; overflow-y: auto; }
+.pl-colonne-corps { display: flex; flex-direction: column; gap: 8px; max-height: 520px; padding: 2px 8px 8px; overflow-x: hidden; overflow-y: auto; }
 .pl-vide { padding: 16px 4px; color: #94a3b8; font-size: 12px; text-align: center; }
 .pl-plus { padding: 4px; color: var(--pl-gris); font-size: 12px; text-align: center; }
-.pl-carte { display: grid; gap: 3px; width: 100%; padding: 10px; border: 1px solid var(--pl-ligne); border-radius: 10px; background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.pl-carte { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--pl-ligne); border-radius: 10px; background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
 .pl-carte:hover { border-color: #94a3b8; box-shadow: 0 2px 8px #0f172a12; }
 .pl-carte:focus-visible { outline: 2px solid var(--pl-teal); outline-offset: 2px; }
 .pl-carte-haut { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .pl-carte-haut strong { min-width: 0; overflow: hidden; color: var(--pl-encre); text-overflow: ellipsis; white-space: nowrap; }
+.pl-carte > span { min-width: 0; }
+.pl-carte-haut > :last-child:not(strong) { flex-shrink: 0; }
+.pl-carte-titre, .pl-carte-ligne { overflow-wrap: anywhere; }
 .pl-carte-titre { color: #1e293b; font-size: 12px; }
 .pl-carte-ligne { color: var(--pl-gris); font-size: 12px; }
 .pl-carte-ligne.pl-rouge { font-weight: 600; }
