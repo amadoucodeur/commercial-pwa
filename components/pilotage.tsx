@@ -8,8 +8,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  AlarmClock, ArrowDownRight, Hourglass, ArrowUpRight, Flame, Inbox, MapPin, Phone, PhoneCall,
-  Snowflake, Sparkles, Sun, Trophy, UserRound, UsersRound, X,
+  ArrowDownRight, Hourglass, ArrowUpRight, Flame, MapPin, Phone,
+  Snowflake, Sparkles, Sun, UserRound, UsersRound, X,
 } from "lucide-react";
 
 type Dossier = {
@@ -365,7 +365,6 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
   const nomContact = (dossierId: string) => contacts.get(vue.dossierParId.get(dossierId)?.contact_id ?? "")?.nom ?? "…";
   const libelleSelection = !selection.size ? (equipe ? "Toute l’équipe" : "Mes dossiers")
     : selection.size === 1 ? nomAgent.get(choisis[0]) ?? "1 agent" : `${selection.size} agents regroupés`;
-  const taux = k.gagnes + k.perdus ? k.gagnes / (k.gagnes + k.perdus) : null;
   const agentDe = (id: string | null) => (id ? nomAgent.get(id) : "Non attribué");
   const dossierOuvert = ouvert ? vue.dossierParId.get(ouvert) : undefined;
   const periode = libellePeriode(debut, fin);
@@ -405,30 +404,18 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       </div>
     </div>}
 
-    {/* Synthèse : le portefeuille en un chiffre et une barre, puis 4 chiffres d'activité. */}
-    <div className="pl-synthese">
-      <div className="pl-bloc pl-portefeuille">
+    {/* Portefeuille par chaleur (les chiffres d'activité sont dans les trois blocs ci-dessus). */}
+    <div className="pl-bloc pl-portefeuille">
         <p className="pl-surtitre"><UsersRound size={14} /> {libelleSelection}<span className="pl-portee">à ce jour</span></p>
         <p className="pl-portefeuille-total"><strong>{nombre(k.actifs)}</strong> dossier{k.actifs > 1 ? "s" : ""} en cours{equipe && k.agents > 1 ? <span> · {k.agents} agents</span> : null}</p>
         <div className="pl-barre" aria-hidden="true">{k.repartition.filter((r) => r.n).map((r) => <span key={r.cle} className={`pl-c-${r.cle}`} style={{ width: `${(r.n / Math.max(1, k.actifs)) * 100}%` }} />)}</div>
         <ul className="pl-legende">{k.repartition.map((r) => <li key={r.cle}><span className={`pl-point pl-c-${r.cle}`} />{r.libelle} <strong>{nombre(r.n)}</strong></li>)}</ul>
-        <p className={`pl-endormis${k.endormis ? "" : " pl-vert"}`} title="Sans contact depuis plus longtemps que la durée normale de leur étape (Nouveau 3 j, Contact établi 8 j, Rendez-vous 6 j, Proposition 8 j, Négociation 6 j)">
-          <Hourglass size={13} />{k.endormis ? `${nombre(k.endormis)} dossier${k.endormis > 1 ? "s" : ""} endormi${k.endormis > 1 ? "s" : ""} : sans contact depuis trop longtemps` : "Aucun dossier endormi"}
-        </p>
-      </div>
-      <div className="pl-tuiles">
-        <Tuile titre="Actions faites" portee={periode} valeur={k.actions} precedent={k.actionsPrec} Icone={PhoneCall} aide="Appels, visites, rendez-vous, messages sur la période" />
-        <Tuile titre="En retard" portee="à ce jour" valeur={k.retard} Icone={AlarmClock} alerte={k.retard > 0} aide="Actions dont l’échéance est passée, quelle que soit la période"  sous={k.retard ? "à traiter en premier" : "rien en retard"} sousTon={k.retard ? undefined : "ok"} />
-        <Tuile titre="Nouveaux" portee={periode} aide="Dossiers créés sur la période" valeur={k.nouveaux} precedent={k.nouveauxPrec} Icone={Inbox}
-          sous={k.nonContactes ? `${k.nonContactes} à contacter` : k.nouveaux ? "tous contactés" : undefined} sousTon={k.nonContactes ? "alerte" : "ok"} />
-        <Tuile titre="Gagnés" portee={periode} aide="Dossiers gagnés sur la période" valeur={k.gagnes} precedent={k.gagnesPrec} Icone={Trophy} sous={taux === null ? "aucun dossier clos" : `${pourcent(taux)} de réussite`} />
-      </div>
     </div>
 
     {/* Actions à mener : une carte = un dossier ; la toucher ouvre sa fiche. */}
     <div className="pl-bloc pl-tableau">
       <div className="pl-tableau-tete">
-        <div><h3>À mener <span className="pl-portee">à ce jour</span></h3><p>Le travail en cours, toutes dates confondues ; seule la colonne Nouveaux suit la période. Touchez une carte pour lire le dossier.</p></div>
+        <div><h3>À mener <span className="pl-portee">à ce jour</span></h3><p>Seule la colonne Nouveaux suit la période. Touchez une carte pour lire le dossier.</p></div>
         <div className="pl-onglets" role="tablist">
           {([["priorite", "Par priorité"], ["chaleur", "Par chaleur"]] as const).map(([cle, titre]) =>
             <button key={cle} type="button" role="tab" aria-selected={onglet === cle} onClick={() => setOnglet(cle)}>{titre}</button>)}
@@ -513,7 +500,7 @@ function Direction({ k, d, periode, qui, equipe, nomAgent, blocage, onBlocage }:
       <p className="pl-surtitre">L’essentiel</p>
       <p className="pl-resume-texte">
         {debutPhrase}, {qui} {qui === "vous" ? "avez" : qui.startsWith("les ") ? "ont" : "a"} mené <strong>{pluriel(k.actions, "action")}</strong>{evoActions && <> ({evoActions} par rapport à la période précédente)</>} et reçu <strong>{pluriel(k.nouveaux, "nouveau prospect", "nouveaux prospects")}</strong>.
-        {" "}<strong>{pluriel(k.gagnes, "dossier gagné", "dossiers gagnés")}</strong>, {pluriel(k.perdus, "perdu")}.
+        {" "}<strong>{pluriel(k.gagnes, "dossier gagné", "dossiers gagnés")}</strong>, {pluriel(k.perdus, "perdu")}{k.gagnes + k.perdus ? ` (${pourcent(k.gagnes / (k.gagnes + k.perdus))} de réussite)` : ""}.
       </p>
       <p className={`pl-resume-texte pl-resume-alerte${surveiller.length ? "" : " pl-vert"}`}>
         {surveiller.length ? <><strong>À surveiller :</strong> {surveiller.join(" ; ")}.</> : "Rien de bloquant : chaque dossier est suivi."}
@@ -536,9 +523,8 @@ function Direction({ k, d, periode, qui, equipe, nomAgent, blocage, onBlocage }:
           {lignesEvolution.map((l) => {
             const ecart = l.v - l.avant;
             const bon = ecart * l.bonSens > 0;
-            return <li key={l.titre}><span>{l.titre}</span><strong>{nombre(l.v)}
-              {ecart !== 0 && <em className={bon ? "pl-vert" : "pl-rouge"}>{ecart > 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{evolution(l.v, l.avant) || `${ecart > 0 ? "+" : ""}${ecart}`}</em>}
-              <small>avant {nombre(l.avant)}</small></strong></li>;
+            return <li key={l.titre} title={`Période précédente : ${nombre(l.avant)}`}><span>{l.titre}</span><strong>{nombre(l.v)}
+              {ecart !== 0 && <em className={bon ? "pl-vert" : "pl-rouge"}>{ecart > 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{evolution(l.v, l.avant) || `${ecart > 0 ? "+" : ""}${ecart}`}</em>}</strong></li>;
           })}
         </ul>
       </section>
@@ -560,21 +546,6 @@ function Direction({ k, d, periode, qui, equipe, nomAgent, blocage, onBlocage }:
 
 function Voyant({ ton }: { ton: Ton }) {
   return <span className={`pl-voyant pl-voyant-${ton}`}><span aria-hidden="true" />{VOYANTS[ton]}</span>;
-}
-
-function Tuile({ titre, portee, valeur, precedent, Icone, aide, sous, alerte = false, sousTon }: {
-  titre: string; portee?: string; valeur: number; precedent?: number; Icone: typeof Flame; aide?: string; sous?: string; alerte?: boolean; sousTon?: "alerte" | "ok";
-}) {
-  const evolution = precedent === undefined ? 0 : valeur - precedent;
-  return <div className="pl-bloc pl-tuile" title={aide}>
-    <p className="pl-tuile-titre"><span>{titre}</span><Icone size={15} /></p>
-    {portee && <p className="pl-tuile-portee">{portee}</p>}
-    <p className={`pl-tuile-valeur${alerte ? " pl-rouge" : ""}`}>{nombre(valeur)}
-      {evolution !== 0 && <span className={evolution > 0 ? "pl-hausse" : "pl-baisse"} title="Par rapport à la période précédente de même durée">
-        {evolution > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{evolution > 0 ? "+" : ""}{nombre(evolution)}</span>}
-    </p>
-    {sous && <p className={`pl-tuile-sous${sousTon === "alerte" ? " pl-rouge" : sousTon === "ok" ? " pl-vert" : ""}`}>{sous}</p>}
-  </div>;
 }
 
 function Colonne({ titre, portee, nombre: n, ton, vide, children }: { titre: string; portee?: string; nombre: number; ton: string; vide: string; children: React.ReactNode }) {
@@ -755,8 +726,6 @@ const styles = `
 .pl-initiales { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; background: #e2e8f0; color: #334155; font-size: 10px; font-weight: 800; }
 .pl-puce-on .pl-initiales { background: var(--pl-teal); color: #fff; }
 
-.pl-synthese { display: grid; gap: 12px; }
-@media (min-width: 1024px) { .pl-synthese { grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr); } }
 .pl-portefeuille { padding: 16px; }
 .pl-surtitre { display: inline-flex; align-items: center; gap: 6px; color: var(--pl-teal); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .pl-portefeuille-total { margin-top: 6px !important; color: var(--pl-gris); }
@@ -767,11 +736,6 @@ const styles = `
 .pl-legende strong { color: var(--pl-encre); font-variant-numeric: tabular-nums; }
 .pl-point { width: 8px; height: 8px; border-radius: 50%; }
 .pl-c-chaud { background: #f43f5e; } .pl-c-tiede { background: #fbbf24; } .pl-c-froid { background: #38bdf8; } .pl-c-non_qualifie { background: #cbd5e1; }
-.pl-tuiles { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (min-width: 768px) { .pl-tuiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.pl-tuile { padding: 14px; }
-.pl-tuile-titre { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: var(--pl-gris); font-size: 12px; font-weight: 600; }
-.pl-tuile-titre svg { color: #94a3b8; }
 .pl-resume { display: grid; gap: 6px; padding: 16px 18px; border-left: 4px solid var(--pl-teal); }
 .pl-resume-texte { color: #1e293b; font-size: 15px; line-height: 1.55; }
 .pl-resume-texte strong { color: var(--pl-encre); }
@@ -806,13 +770,10 @@ const styles = `
 .pl-voyant-neutre { background: #f1f5f9; color: #64748b; }
 .pl-blocage-liste { overflow: hidden; }
 .pl-blocage-cartes { display: grid; gap: 8px; max-height: 480px; padding: 12px; overflow-y: auto; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); background: #f8fafc99; }
-.pl-tuile-portee { margin-top: 1px !important; color: #94a3b8; font-size: 11px; }
 .pl-portee { margin-left: 6px; padding: 1px 7px; border-radius: 99px; background: #f1f5f9; color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; vertical-align: middle; }
 .pl-colonne-tete h4 small { display: block; color: #94a3b8; font-size: 11px; font-weight: 500; }
-.pl-tuile-valeur { display: flex; align-items: baseline; gap: 8px; margin-top: 6px !important; color: var(--pl-encre); font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .pl-hausse, .pl-baisse { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700; }
 .pl-hausse { color: #047857; } .pl-baisse { color: #be123c; }
-.pl-tuile-sous { margin-top: 2px !important; color: var(--pl-gris); font-size: 12px; }
 .pl-rouge { color: #be123c !important; } .pl-vert { color: #047857 !important; } .pl-rose { color: #e11d48; } .pl-gras { font-weight: 700; } .pl-pale { color: #94a3b8; }
 
 .pl-tableau { overflow: hidden; }
@@ -846,8 +807,6 @@ const styles = `
 .pl-carte-ligne.pl-rouge { font-weight: 600; }
 .pl-carte-endormie { border-left: 3px solid #d97706; background: #fffdf7; }
 .pl-endormi { display: inline-flex; align-items: center; gap: 4px; justify-self: start; width: fit-content; margin: 2px 0 0 !important; padding: 1px 7px; border-radius: 99px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; }
-.pl-endormis { display: flex; align-items: center; gap: 6px; margin-top: 10px !important; color: #b45309; font-size: 12px; font-weight: 600; }
-.pl-endormis.pl-vert { color: #047857; }
 .pl-carte-bas { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; color: var(--pl-gris); font-size: 12px; }
 .pl-agent { display: inline-flex; align-items: center; gap: 5px; max-width: 55%; min-width: 0; color: #475569; font-size: 12px; }
 .pl-agent > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
