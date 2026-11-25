@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowRight, CalendarClock, CalendarDays, Check, ChevronDown, ChevronRight, CirclePlus,
   Clock3, CloudOff, CloudUpload, Compass, Crosshair, Globe2, Home, LogOut, MapPin, MapPinned,
-  Phone, RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingUp, Users, X,
+  Phone, RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingUp, Users, X, CalendarPlus, CircleAlert,
 } from "lucide-react";
 import { ProspectForm } from "./prospect-form";
 import { ManagerLocalities } from "./manager-localities";
@@ -17,6 +17,7 @@ import { DesktopDossierTable } from "./desktop-dossier-table";
 import { CommercialDashboard } from "./commercial-dashboard";
 import { CommercialActionsDetail } from "./commercial-actions-detail";
 import { ReprogrammerAction, noteReprogrammee } from "./reprogrammer-action";
+import { DonnerSuite } from "./donner-suite";
 import { ContactsDossier } from "./contacts-dossier";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
@@ -101,6 +102,9 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   const [selection, setSelection] = useState<string | null>(null);
   const [completion, setCompletion] = useState<Tache | null>(null);
   const [reprogrammation, setReprogrammation] = useState<Tache | null>(null);
+  // « Sans suite » : dossiers actifs de l'agent sans aucune prochaine action programmée.
+  const [suite, setSuite] = useState<string | null>(null);
+  const [filtreSansSuite, setFiltreSansSuite] = useState(false);
   const [completionDecision, setCompletionDecision] = useState("programmer");
   const [completionEtape, setCompletionEtape] = useState("nouveau");
   const [etapeAConfirmer, setEtapeAConfirmer] = useState<string | null>(null);
@@ -387,11 +391,11 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     return () => document.removeEventListener("keydown", fermerEchap);
   }, [filtresOuverts]);
   useEffect(() => {
-    if (!filtresOuverts && !selection && !completion && !reprogrammation && !creation) return;
+    if (!filtresOuverts && !selection && !completion && !reprogrammation && !creation && !suite) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
-  }, [filtresOuverts, selection, completion, reprogrammation, creation]);
+  }, [filtresOuverts, selection, completion, reprogrammation, creation, suite]);
 
   const contactParId = useMemo(() => new Map(contacts.map((contact) => [contact.id, contact])), [contacts]);
   const dossierParId = useMemo(() => new Map(dossiers.map((dossier) => [dossier.id, dossier])), [dossiers]);
@@ -401,6 +405,15 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   const retard = taches.filter((tache) => day(tache.echeance_at) < aujourdHui);
   const duJour = taches.filter((tache) => day(tache.echeance_at) === aujourdHui);
   const prochaines = taches.filter((tache) => day(tache.echeance_at) > aujourdHui);
+  // Dossiers sans suite : à moi, ni gagnés ni perdus, et sans action ouverte. Les chauds d'abord, puis les plus anciens.
+  const sansSuite = useMemo(() => {
+    const suivis = new Set(taches.map((tache) => tache.opportunite_id));
+    const rang = (temperature: string | null) => temperature === "chaud" ? 0 : temperature === "tiede" ? 1 : temperature ? 3 : 2;
+    return dossiers
+      .filter((dossier) => dossier.owner_id === session.user.id && !["gagne", "perdu"].includes(dossier.etape) && !suivis.has(dossier.id) && !estLocal(dossier.id))
+      .sort((a, b) => rang(a.temperature) - rang(b.temperature) || a.created_at.localeCompare(b.created_at));
+  }, [dossiers, taches, session.user.id]);
+  const idsSansSuite = useMemo(() => new Set(sansSuite.map((dossier) => dossier.id)), [sansSuite]);
   const dossierActif = selection ? dossierParId.get(selection) : null;
   const contactActif = dossierActif ? contactParId.get(dossierActif.contact_id) : null;
   const prenom = session.user.name?.split(/[\s@._-]/)[0] || "vous";
@@ -420,7 +433,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       && (!criteres.fin || jour <= criteres.fin);
   }), [dossiers, contactParId, localiteParId, recherche, manager]);
   const dossiersVisiblesDesktop = useMemo(() => filtrerDossiersDesktop(filtresDesktop), [filtrerDossiersDesktop, filtresDesktop]);
-  const dossiersVisibles = dossiersVisiblesDesktop;
+  const dossiersVisibles = filtreSansSuite ? dossiersVisiblesDesktop.filter((dossier) => idsSansSuite.has(dossier.id)) : dossiersVisiblesDesktop;
   const apercuFiltresDesktop = filtresOuverts ? filtrerDossiersDesktop(brouillonFiltres).length : dossiersVisiblesDesktop.length;
   const nombreFiltresDesktop = Object.values(filtresDesktop).filter(Boolean).length;
   const modifierFiltreDesktop = (champ: keyof FiltresDesktop, valeur: string) =>
@@ -571,6 +584,32 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
   }
 
+  function carteSansSuite(dossier: Dossier) {
+    const contact = contactParId.get(dossier.contact_id);
+    return <article className="task-card sans-suite-card" key={dossier.id}>
+      <div className="task-leading"><span className="task-icon"><CircleAlert size={18} /></span><div><strong>{contact?.nom ?? "Dossier"}</strong><small>{label(etapes, dossier.etape)}{dossier.temperature ? ` · ${label([["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]], dossier.temperature)}` : ""} · créé le {dateTime(dossier.created_at)}</small></div></div>
+      <div className="task-actions">
+        {contact?.telephone && <a href={`tel:${contact.telephone}`}><Phone size={16} /> Appeler</a>}
+        <button onClick={() => setSelection(dossier.id)}>Voir la fiche <ChevronRight size={15} /></button>
+        <button className="finish-action" onClick={() => { setMessage(""); setSuite(dossier.id); }}><CalendarPlus size={16} /> Donner une suite</button>
+      </div>
+    </article>;
+  }
+
+  async function programmerSuite(dossierId: string, titre: string, echeance: Date) {
+    const dossier = dossierParId.get(dossierId);
+    if (!dossier?.owner_id) return;
+    const responsable = dossier.owner_id;
+    const echeanceIso = echeance.toISOString();
+    const succes = await executer({ type: "insert", table: "crm_taches", libelle: `Action « ${titre} »`, valeurs: {
+      organisation_id: session.user.organisationId, opportunite_id: dossierId, responsable_id: responsable,
+      createur_id: session.user.id, titre, echeance_at: echeanceIso,
+    } }, `Suite programmée : ${titre}.`, "taches", () => {
+      if (responsable === session.user.id) ajouterTacheLocale({ id: idLocal(), opportunite_id: dossierId, titre, echeance_at: echeanceIso, notes: null });
+    });
+    if (succes) setSuite(null);
+  }
+
   function carteTache(tache: Tache) {
     const dossier = dossierParId.get(tache.opportunite_id);
     const contact = dossier ? contactParId.get(dossier.contact_id) : null;
@@ -609,11 +648,16 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     <header className="topbar"><div className="topbar-inner"><div className="brand"><Image src="/icon-192.png" alt="" width={38} height={38} priority /><span>Trabad Commercial</span></div><div className="topbar-actions">{(!enLigne || fileAttente.length > 0) && <span className={`sync-chip ${enLigne ? "" : "offline"}`} role="status">{enLigne ? <CloudUpload size={15} /> : <CloudOff size={15} />}{enLigne ? synchroEnCours ? "Envoi…" : `${fileAttente.length} en attente` : `Hors ligne${fileAttente.length ? ` · ${fileAttente.length}` : ""}`}</span>}<button className="icon-button" onClick={() => vue === "vitrine" ? setVitrineRefreshKey((value) => value + 1) : vue === "pilotage" || vue === "dossiers" && gestionAvancee ? setManagerRefreshKey((value) => value + 1) : void actualiser()} aria-label="Actualiser"><RefreshCw size={19} /></button></div></div></header>
     <aside className="desktop-sidebar" aria-label="Espace commercial"><div className="desktop-sidebar-inner"><p className="desktop-sidebar-label">ESPACE COMMERCIAL</p><nav aria-label="Navigation principale">{navigation.map(([key, Icon, title]) => <button key={key} type="button" className={vue === key || key === "compte" && vue === "localites" ? "active" : ""} aria-current={vue === key ? "page" : undefined} onClick={() => { setVue(key); setSelection(null); }}><Icon size={19} /><span>{title}</span><ChevronRight size={16} className="desktop-nav-chevron" /></button>)}</nav><div className="desktop-sidebar-foot"><span className="desktop-sidebar-avatar">{(session.user.name ?? "C").slice(0, 1).toUpperCase()}</span><span><strong>{session.user.name || "Commercial"}</strong><small>{manager ? "Responsable commercial" : "Agent commercial"}</small></span></div></div></aside>
     <main className={`content view-${vue}`}>
-      {message && !creation && !selection && !completion && !reprogrammation && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
+      {message && !creation && !selection && !completion && !reprogrammation && !suite && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
       {loading ? <div className="loading"><Sparkles size={23} /> Votre espace se prépare…</div> : <>
         {vue === "accueil" && <>
           <section className="hero"><div className="hero-decoration" /><p className="eyebrow light">AUJOURD’HUI SUR LE TERRAIN</p><h1>Bonjour, {prenom}<span>✦</span></h1><p>Chaque rencontre est une opportunité.</p><div className="hero-bottom"><span><CalendarDays size={15} /> {new Intl.DateTimeFormat("fr-FR", { dateStyle: "full", timeZone: "Africa/Abidjan" }).format(new Date())}</span></div></section>
           <div className="stats"><div className="stat-card"><span className="stat-symbol blue"><Users size={19} /></span><strong>{dossiers.length}{dossiersSuivants ? "+" : ""}</strong><small>Dossiers chargés</small></div><div className="stat-card"><span className="stat-symbol violet"><CalendarDays size={19} /></span><strong>{duJour.length}</strong><small>Aujourd’hui</small></div><div className="stat-card"><span className="stat-symbol orange"><Clock3 size={19} /></span><strong>{retard.length}</strong><small>En retard</small></div></div>
+          {sansSuite.length > 0 && <button className="sans-suite-cta" onClick={() => { setFiltreSansSuite(true); setVue("dossiers"); setSelection(null); }}>
+            <span className="sans-suite-icone"><CircleAlert size={20} /></span>
+            <span><strong>{sansSuite.length} dossier{sansSuite.length > 1 ? "s" : ""} sans suite</strong><small>Aucune prochaine action prévue : donnez-leur une suite</small></span>
+            <ArrowRight size={18} />
+          </button>}
           <button className="new-cta" disabled={!profilActif && !manager} onClick={() => { setMessage(""); setCreation(true); }}><span><CirclePlus size={22} /> Nouveau prospect</span><ArrowRight size={19} /></button>
           {!profilActif && !manager && <div className="warning">Votre profil commercial doit être lié par un responsable avant toute nouvelle saisie.</div>}
           <div className="section-heading"><div><p className="eyebrow">VOS PRIORITÉS</p><h2>À faire</h2></div><button onClick={() => setVue("agenda")}>Tout voir <ArrowRight size={16} /></button></div>
@@ -626,6 +670,8 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
           {manager && gestionAvancee ? <ManagerWorkspace mode="prospects" initialAgent={agentGestion} agentsDisponibles={agentsTous} client={client} organisationId={session.user.organisationId} refreshKey={managerRefreshKey} localites={localites} onCreate={() => { setMessage(""); setCreation(true); }} onTeamChanged={() => setManagerRefreshKey((value) => value + 1)} /> : <>
           <div className="page-title"><p className="eyebrow">{manager ? "PORTEFEUILLE DE L’ÉQUIPE" : "VOTRE PORTEFEUILLE"}</p><h1>Les dossiers <span>{dossiers.length}{dossiersSuivants ? "+" : ""}</span></h1><p>Retrouvez vite un contact et poursuivez le suivi.</p></div>
           <div className="search-field"><Search size={18} /><input value={recherche} onChange={(event) => setRecherche(event.target.value)} placeholder="Nom, téléphone, commune…" aria-label="Rechercher un dossier" /></div>
+          <div className="chips sans-suite-chips" role="group" aria-label="Filtre rapide"><button type="button" className={!filtreSansSuite ? "active" : ""} aria-pressed={!filtreSansSuite} onClick={() => setFiltreSansSuite(false)}>Tous</button><button type="button" className={`chip-alerte${filtreSansSuite ? " active" : ""}`} aria-pressed={filtreSansSuite} onClick={() => setFiltreSansSuite(true)}><CircleAlert size={14} /> Sans suite · {sansSuite.length}</button></div>
+          {filtreSansSuite && <p className="field-help">Vos dossiers en cours sans aucune action programmée. Les chauds d’abord. Touchez « Donner une suite » pour programmer la prochaine action.</p>}
           <div className="desktop-dossier-filters"><button ref={boutonFiltresRef} type="button" className="desktop-filter-trigger" aria-haspopup="dialog" aria-expanded={filtresOuverts} onClick={ouvrirFiltres}><SlidersHorizontal size={17} /> Filtres {nombreFiltresDesktop > 0 && <em>{nombreFiltresDesktop}</em>}<ChevronDown size={16} /></button><button ref={boutonFiltresMobileRef} type="button" className="mobile-filter-trigger" aria-haspopup="dialog" aria-expanded={filtresOuverts} onClick={ouvrirFiltres}><SlidersHorizontal size={17} /> Filtres {nombreFiltresDesktop > 0 && <em>{nombreFiltresDesktop}</em>}<ChevronDown size={16} /></button>{filtresOuverts && <div className="desktop-filter-backdrop" onClick={fermerFiltres}><section className="desktop-filter-dialog" role="dialog" aria-modal="true" aria-labelledby="dossier-filters-title" onClick={(event) => event.stopPropagation()}><div className="desktop-filter-dialog-head"><div><p className="eyebrow">AFFINER LA LISTE</p><h2 id="dossier-filters-title">Filtrer les dossiers</h2><span>{apercuFiltresDesktop} résultat{apercuFiltresDesktop > 1 ? "s" : ""} correspondant{apercuFiltresDesktop > 1 ? "s" : ""}</span></div><button type="button" onClick={fermerFiltres} aria-label="Fermer les filtres"><X size={19} /></button></div><div className="desktop-filter-grid">
             <label>Étape<select autoFocus value={brouillonFiltres.etape} onChange={(event) => modifierFiltreDesktop("etape", event.target.value)}><option value="">Toutes les étapes</option>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
             <label>Service<select value={brouillonFiltres.service} onChange={(event) => modifierFiltreDesktop("service", event.target.value)}><option value="">Tous les services</option>{services.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
@@ -636,8 +682,8 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
             <label>Créé depuis<input type="date" value={brouillonFiltres.debut} max={brouillonFiltres.fin || undefined} onChange={(event) => modifierFiltreDesktop("debut", event.target.value)} /></label>
             <label>Créé jusqu’au<input type="date" value={brouillonFiltres.fin} min={brouillonFiltres.debut || undefined} onChange={(event) => modifierFiltreDesktop("fin", event.target.value)} /></label>
           </div><div className="desktop-filter-dialog-footer"><button type="button" className="desktop-filter-reset" onClick={() => setBrouillonFiltres(filtresDesktopVides)}>Réinitialiser</button><div><button type="button" className="desktop-filter-cancel" onClick={fermerFiltres}>Annuler</button><button type="button" className="desktop-filter-apply" disabled={!!brouillonFiltres.debut && !!brouillonFiltres.fin && brouillonFiltres.debut > brouillonFiltres.fin} onClick={() => { setFiltresDesktop(brouillonFiltres); fermerFiltres(); }}>Afficher {apercuFiltresDesktop} dossier{apercuFiltresDesktop > 1 ? "s" : ""}</button></div></div></section></div>}</div>
-          {desktopLayout ? <DesktopDossierTable dossiers={dossiersVisiblesDesktop} contacts={contactParId} localites={localiteParId} agents={agentParId} manager={manager} onOpen={setSelection} />
-            : <div className="dossier-list">{dossiersVisibles.map((dossier) => { const contact = contactParId.get(dossier.contact_id); const commune = dossier.localite_id ? localiteParId.get(dossier.localite_id)?.nom : contact?.localisation; return <button className="dossier-card" key={dossier.id} onClick={() => setSelection(dossier.id)}><span className="avatar">{(contact?.nom ?? "?").slice(0, 1).toUpperCase()}</span><span className="dossier-main"><strong>{contact?.nom ?? "Contact"}</strong><span>{(dossier.services ?? [dossier.service]).map((service) => label(services, service)).join(" · ")}</span><small><MapPin size={12} /> {commune || "Commune à préciser"}</small></span><span className="dossier-right"><span className="stage" data-stage={dossier.etape}>{label(etapes, dossier.etape)}</span><ChevronRight size={18} /></span></button>; })}</div>}
+          {desktopLayout ? <DesktopDossierTable dossiers={dossiersVisibles} contacts={contactParId} localites={localiteParId} agents={agentParId} manager={manager} onOpen={setSelection} />
+            : <div className="dossier-list">{dossiersVisibles.map((dossier) => { const contact = contactParId.get(dossier.contact_id); const commune = dossier.localite_id ? localiteParId.get(dossier.localite_id)?.nom : contact?.localisation; const carte = <button className="dossier-card" key={dossier.id} onClick={() => setSelection(dossier.id)}><span className="avatar">{(contact?.nom ?? "?").slice(0, 1).toUpperCase()}</span><span className="dossier-main"><strong>{contact?.nom ?? "Contact"}</strong><span>{(dossier.services ?? [dossier.service]).map((service) => label(services, service)).join(" · ")}</span><small><MapPin size={12} /> {commune || "Commune à préciser"}</small></span><span className="dossier-right"><span className="stage" data-stage={dossier.etape}>{label(etapes, dossier.etape)}</span>{idsSansSuite.has(dossier.id) && <span className="sans-suite-badge">Sans suite</span>}<ChevronRight size={18} /></span></button>; return idsSansSuite.has(dossier.id) ? <div className="carte-avec-suite" key={dossier.id}>{carte}<button type="button" className="suite-bouton" onClick={() => { setMessage(""); setSuite(dossier.id); }}><CalendarPlus size={16} /> Donner une suite</button></div> : carte; })}</div>}
           {dossiersVisibles.length === 0 && <div className="empty mobile-dossier-empty"><Users size={26} /><strong>Aucun dossier trouvé</strong><p>{dossiersSuivants ? "Chargez les dossiers suivants pour poursuivre la recherche." : "Changez de filtre ou ajoutez un prospect."}</p></div>}
           {dossiersSuivants && <div className="dossier-load-more"><span>La recherche porte sur les {dossiers.length} dossiers chargés.</span><button type="button" disabled={chargementSuite} onClick={() => void chargerSuiteDossiers()}>{chargementSuite ? "Chargement…" : "Charger les dossiers suivants"}<ArrowRight size={16} /></button></div>}
           </>}
@@ -646,7 +692,8 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
           { title: "En retard", items: retard, tone: "late" },
           { title: "Aujourd’hui", items: duJour, tone: "today" },
           { title: "À venir", items: prochaines, tone: "future" },
-        ].map((group) => <section className="agenda-group" key={group.title}><h2><span className={`group-dot ${group.tone}`} />{group.title}<small>{group.items.length}</small></h2>{group.items.length ? group.items.map(carteTache) : <p className="group-empty">Aucune action</p>}</section>)}</>}
+        ].map((group) => <section className="agenda-group" key={group.title}><h2><span className={`group-dot ${group.tone}`} />{group.title}<small>{group.items.length}</small></h2>{group.items.length ? group.items.map(carteTache) : <p className="group-empty">Aucune action</p>}</section>)}
+          {sansSuite.length > 0 && <section className="agenda-group"><h2><span className="group-dot late" />Dossiers sans suite<small>{sansSuite.length}</small></h2><p className="group-empty">Aucune action n’est prévue pour ces dossiers.</p>{sansSuite.slice(0, 5).map(carteSansSuite)}{sansSuite.length > 5 && <button type="button" className="text-action" onClick={() => { setFiltreSansSuite(true); setVue("dossiers"); }}>Voir les {sansSuite.length} dossiers sans suite <ArrowRight size={15} /></button>}</section>}</>}
         {vue === "pilotage" && manager && <ManagerWorkspace mode="performance" client={client} organisationId={session.user.organisationId} refreshKey={managerRefreshKey} localites={localites} onCreate={() => { setMessage(""); setCreation(true); }} onTeamChanged={() => setManagerRefreshKey((value) => value + 1)} onOpenAgentDossiers={(agentId) => { setAgentGestion(agentId); setGestionAvancee(true); setVue("dossiers"); }} />}
         {vue === "compte" && <><div className="page-title"><p className="eyebrow">VOTRE ESPACE</p><h1>Mon compte</h1></div><div className="account-card"><div className="account-avatar">{(session.user.name ?? "C").slice(0, 1).toUpperCase()}</div><strong>{session.user.name}</strong><span>Équipe commerciale Trabad</span><div className="account-status"><span className={enLigne ? "" : "offline"}>● {enLigne ? "En ligne" : "Hors ligne"}{fileAttente.length ? ` · ${fileAttente.length} en attente` : ""}</span><span>{profilActif ? "Profil actif" : "Profil non lié"}</span></div></div>{manager && <button className="manager-link" onClick={() => setVue("localites")}><span className="manager-icon"><MapPinned size={20} /></span><span><strong>Communes & localités</strong><small>Ajouter, activer ou désactiver des lieux</small></span><ChevronRight size={19} /></button>}<div className="account-note"><Compass size={20} /><p>Sans réseau, vos dossiers restent consultables et vos saisies sont gardées sur l’appareil, puis envoyées automatiquement au retour de la connexion. Le GPS n’est ajouté qu’avec l’autorisation de votre appareil.</p></div><button className="logout" disabled={!enLigne} onClick={() => void deconnecter()}><LogOut size={18} /> Se déconnecter</button>{!enLigne && <p className="field-help">La déconnexion nécessite le réseau.</p>}</>}
         {vue === "vitrine" && accesVitrine && <VitrineWorkspace client={client} canEdit={accesVitrine === "editor"} section={sectionVitrine} onSection={setSectionVitrine} onglets refreshKey={vitrineRefreshKey} enLigne={enLigne} />}
@@ -659,6 +706,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     {selection && dossierActif && <div className="sheet-backdrop" onClick={() => setSelection(null)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Détail du dossier" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setSelection(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>DÉTAIL DU DOSSIER</span><button className="icon-button" onClick={() => setSelection(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body">
       {message && <div className="toast" role="status">{message}</div>}
       {dossierLocal && <div className="warning"><CloudUpload size={16} /> Dossier enregistré sur l’appareil. Il sera envoyé au retour du réseau ; vous pourrez ensuite le modifier.</div>}
+      {idsSansSuite.has(dossierActif.id) && <div className="sans-suite-bandeau"><CircleAlert size={17} /><span>Aucune prochaine action n’est prévue pour ce dossier.</span><button type="button" onClick={() => { setMessage(""); setSuite(dossierActif.id); }}>Donner une suite</button></div>}
       <div className="detail-avatar">{(contactActif?.nom ?? "?").slice(0, 1).toUpperCase()}</div><h2>{contactActif?.nom ?? "Contact"}</h2><p>{(dossierActif.services ?? [dossierActif.service]).map((service) => label(services, service)).join(" · ")}</p>
       <div className="detail-chips"><span className="stage" data-stage={dossierActif.etape}>{label(etapes, dossierActif.etape)}</span>{dossierActif.localite_id && <span className="place-chip"><MapPin size={13} /> {localiteParId.get(dossierActif.localite_id)?.nom ?? contactActif?.localisation}</span>}</div>
       <div className="detail-block"><small>QUALIFICATION</small><p>Source : {label(sources, dossierActif.source)} · Température : {label([["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]], dossierActif.temperature ?? "À qualifier")}</p></div>
@@ -673,6 +721,17 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       <h3>Programmer une action</h3>{dossierLocal ? <p className="field-help">Disponible dès que le dossier aura été envoyé.</p> : dossierActif.owner_id ? <form className="new-form" onSubmit={(event) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const titre = String(form.get("titre")); const echeance = new Date(`${form.get("echeance")}:00Z`).toISOString(); const responsable = dossierActif.owner_id; const opportunite = dossierActif.id; void executer({ type: "insert", table: "crm_taches", libelle: `Action « ${titre} »`, valeurs: { organisation_id: session.user.organisationId, opportunite_id: opportunite, responsable_id: responsable, createur_id: session.user.id, titre, echeance_at: echeance } }, "Action programmée.", "taches", () => { if (responsable === session.user.id) ajouterTacheLocale({ id: idLocal(), opportunite_id: opportunite, titre, echeance_at: echeance, notes: null }); }).then((success) => { if (success) formElement.reset(); }); }}><label className="field">Action<select name="titre" defaultValue="Rappeler">{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure (Abidjan)<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label><button className="primary-button" disabled={busy}>Ajouter au programme <ArrowRight size={17} /></button></form> : <p className="field-help">Attribuez d’abord ce dossier à un commercial depuis Loc Manager.</p>}
     </div></section></div>}
 
+    {suite && (() => {
+      const dossier = dossierParId.get(suite);
+      if (!dossier) return null;
+      const contact = contactParId.get(dossier.contact_id);
+      return <DonnerSuite key={suite} contact={contact?.nom ?? "Dossier"} telephone={contact?.telephone}
+        contexte={`${label(etapes, dossier.etape)}${dossier.temperature ? ` · ${label([["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]], dossier.temperature)}` : ""} · aucune action prévue`}
+        busy={busy} message={message}
+        onFermer={() => setSuite(null)}
+        onOuvrirFiche={() => { setSuite(null); setSelection(dossier.id); }}
+        onValider={(titre, echeance) => void programmerSuite(dossier.id, titre, echeance)} />;
+    })()}
     {reprogrammation && (() => {
       const dossier = dossierParId.get(reprogrammation.opportunite_id);
       const contact = dossier ? contactParId.get(dossier.contact_id)?.nom : null;
