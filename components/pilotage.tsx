@@ -46,7 +46,7 @@ const PAR_COLONNE = 25;
  * Au-delà, le dossier s'endort. Le dernier contact est le dernier échange noté, ou la création du dossier.
  * Gagnés, perdus et reportés ne s'endorment pas. Règle partagée avec l'application terrain.
  */
-export const DELAIS_ETAPE: Record<string, number> = { nouveau: 2, contacte: 7, rdv: 5, proposition: 7, negociation: 5 };
+export const DELAIS_ETAPE: Record<string, number> = { nouveau: 3, contacte: 8, rdv: 6, proposition: 8, negociation: 6 };
 /** Recul pour retrouver le dernier échange : au-delà, on retient la création du dossier ou on le dit endormi. */
 export const RECUL_CONTACTS_JOURS = 60;
 export function joursEndormi(etape: string, dernierContact: string, maintenant: number): number | null {
@@ -352,7 +352,7 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
         <p className="pl-portefeuille-total"><strong>{nombre(k.actifs)}</strong> dossier{k.actifs > 1 ? "s" : ""} en cours{equipe && k.agents > 1 ? <span> · {k.agents} agents</span> : null}</p>
         <div className="pl-barre" aria-hidden="true">{k.repartition.filter((r) => r.n).map((r) => <span key={r.cle} className={`pl-c-${r.cle}`} style={{ width: `${(r.n / Math.max(1, k.actifs)) * 100}%` }} />)}</div>
         <ul className="pl-legende">{k.repartition.map((r) => <li key={r.cle}><span className={`pl-point pl-c-${r.cle}`} />{r.libelle} <strong>{nombre(r.n)}</strong></li>)}</ul>
-        <p className={`pl-endormis${k.endormis ? "" : " pl-vert"}`} title="Sans contact depuis plus longtemps que la durée normale de leur étape (Nouveau 2 j, Contact établi 7 j, Rendez-vous 5 j, Proposition 7 j, Négociation 5 j)">
+        <p className={`pl-endormis${k.endormis ? "" : " pl-vert"}`} title="Sans contact depuis plus longtemps que la durée normale de leur étape (Nouveau 3 j, Contact établi 8 j, Rendez-vous 6 j, Proposition 8 j, Négociation 6 j)">
           <Hourglass size={13} />{k.endormis ? `${nombre(k.endormis)} dossier${k.endormis > 1 ? "s" : ""} endormi${k.endormis > 1 ? "s" : ""} : sans contact depuis trop longtemps` : "Aucun dossier endormi"}
         </p>
       </div>
