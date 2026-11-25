@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  AlarmClock, ArrowDownRight, ArrowUpRight, Flame, Inbox, MapPin, Phone, PhoneCall,
+  AlarmClock, ArrowDownRight, Hourglass, ArrowUpRight, Flame, Inbox, MapPin, Phone, PhoneCall,
   Snowflake, Sparkles, Sun, Trophy, UserRound, UsersRound, X,
 } from "lucide-react";
 
@@ -41,6 +41,20 @@ const chaleurDe = (t: string | null) => CHALEURS.find((c) => c.cle === (t ?? "no
 const JOUR = 86_400_000;
 const LIMITE = 10_000;
 const PAR_COLONNE = 25;
+/**
+ * Dossiers « endormis » (idée de Pipedrive) : chaque étape a une durée normale sans contact.
+ * Au-delà, le dossier s'endort. Le dernier contact est le dernier échange noté, ou la création du dossier.
+ * Gagnés, perdus et reportés ne s'endorment pas. Règle partagée avec l'application terrain.
+ */
+export const DELAIS_ETAPE: Record<string, number> = { nouveau: 2, contacte: 7, rdv: 5, proposition: 7, negociation: 5 };
+/** Recul pour retrouver le dernier échange : au-delà, on retient la création du dossier ou on le dit endormi. */
+export const RECUL_CONTACTS_JOURS = 60;
+export function joursEndormi(etape: string, dernierContact: string, maintenant: number): number | null {
+  const delai = DELAIS_ETAPE[etape];
+  if (!delai) return null;
+  const jours = Math.floor((maintenant - Date.parse(dernierContact)) / 86_400_000);
+  return jours > delai ? jours : null;
+}
 const actif = (d: Dossier) => !d.archived_at && d.etape !== "gagne" && d.etape !== "perdu";
 const nombre = (n: number) => new Intl.NumberFormat("fr-FR").format(n);
 const pourcent = (n: number) => new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 0 }).format(n);
@@ -56,6 +70,14 @@ function quand(iso: string, maintenant: number) {
   if (jours === -1) return "hier";
   if (jours === 1) return `demain ${heure}`;
   return jours < 0 ? `il y a ${-jours} j` : `dans ${jours} j`;
+}
+
+/** « aujourd’hui », « 7 derniers jours », « du 3 nov. au 9 nov. » : la période en mots, pour dire ce qui en dépend. */
+function libellePeriode(debut: string, fin: string) {
+  const jour = (iso: string) => new Intl.DateTimeFormat("fr-FR", { timeZone: "UTC", day: "numeric", month: "short" }).format(new Date(`${iso}T00:00:00Z`));
+  const jours = Math.round((Date.parse(`${fin}T00:00:00Z`) - Date.parse(`${debut}T00:00:00Z`)) / JOUR) + 1;
+  if (fin === jourAbidjan(new Date())) return jours === 1 ? "aujourd’hui" : `${jours} derniers jours`;
+  return debut === fin ? `le ${jour(debut)}` : `du ${jour(debut)} au ${jour(fin)}`;
 }
 
 async function toutesLesPages<T>(requete: (de: number, a: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) {
@@ -84,7 +106,7 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
   client: SupabaseClient; organisationId: string; debut: string; fin: string;
   agents: AgentPilotage[]; equipe: boolean; refreshKey: number;
 }) {
-  const [donnees, setDonnees] = useState<{ dossiers: Dossier[]; taches: Tache[]; echanges: Echange[] } | null>(null);
+  const [donnees, setDonnees] = useState<{ dossiers: Dossier[]; taches: Tache[]; echanges: Echange[]; recents: { opportunite_id: string; effectuee_at: string }[] } | null>(null);
   const [contacts, setContacts] = useState<Map<string, Contact>>(new Map());
   const [erreur, setErreur] = useState("");
   const [chargement, setChargement] = useState(true);
@@ -123,8 +145,13 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
         .select("id,opportunite_id,auteur_id,type_activite,effectuee_at")
         .eq("organisation_id", organisationId).gte("effectuee_at", depuis).lt("effectuee_at", jusqua)
         .order("effectuee_at", { ascending: false }).order("id").range(de, a)),
-    ]).then(([dossiers, taches, echanges]) => {
-      if (courante === requete.current) setDonnees({ dossiers, taches, echanges });
+      // Derniers contacts, quelle que soit la période : pour repérer les dossiers endormis.
+      toutesLesPages<{ opportunite_id: string; effectuee_at: string }>((de, a) => client.from("crm_activites")
+        .select("opportunite_id,effectuee_at")
+        .eq("organisation_id", organisationId).gte("effectuee_at", new Date(Date.now() - RECUL_CONTACTS_JOURS * JOUR).toISOString())
+        .order("effectuee_at", { ascending: false }).order("id").range(de, a)),
+    ]).then(([dossiers, taches, echanges, recents]) => {
+      if (courante === requete.current) setDonnees({ dossiers, taches, echanges, recents });
     }).catch((e: Error) => {
       if (courante === requete.current) setErreur(`Pilotage indisponible : ${e.message}`);
     }).finally(() => {
@@ -150,6 +177,15 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
     for (const tache of donnees.taches) if (!tachesOuvertes.has(tache.opportunite_id)) tachesOuvertes.set(tache.opportunite_id, tache);
     const dernierEchange = new Map<string, string>();
     for (const e of donnees.echanges) if (!dernierEchange.has(e.opportunite_id)) dernierEchange.set(e.opportunite_id, e.effectuee_at);
+    const dernierContact = new Map<string, string>();
+    for (const e of donnees.recents) if (!dernierContact.has(e.opportunite_id)) dernierContact.set(e.opportunite_id, e.effectuee_at);
+    const endormis = new Map<string, number>();
+    for (const x of donnees.dossiers) {
+      if (!actif(x)) continue;
+      const contact = dernierContact.get(x.id);
+      const jours = joursEndormi(x.etape, contact && contact > x.created_at ? contact : x.created_at, maintenant);
+      if (jours !== null) endormis.set(x.id, jours);
+    }
 
     const periode = (iso: string | null) => t(iso) >= d && t(iso) < f;
     const precedente = (iso: string | null) => t(iso) >= p && t(iso) < d;
@@ -182,6 +218,7 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       actifs: actifs.length,
       repartition: CHALEURS.map((c) => ({ ...c, n: actifs.filter((x) => (x.temperature ?? "non_qualifie") === c.cle).length })),
       agents: new Set(actifs.map((x) => x.owner_id).filter(Boolean)).size,
+      endormis: actifs.filter((x) => endormis.has(x.id)).length,
     };
 
     // Priorité : actions ouvertes par échéance ; dossiers actifs sans action à part.
@@ -228,7 +265,7 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
       };
     }).filter((l) => l.agent.actif || l.actions || l.portefeuille);
 
-    return { indicateurs, priorite, parChaleur, listeNouveaux, lignes, tachesOuvertes, dernierEchange, dossierParId };
+    return { indicateurs, priorite, parChaleur, listeNouveaux, lignes, tachesOuvertes, dernierEchange, dossierParId, endormis };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [donnees, bornes, selection, agents, maintenant]);
 
@@ -287,11 +324,12 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
   const taux = k.gagnes + k.perdus ? k.gagnes / (k.gagnes + k.perdus) : null;
   const agentDe = (id: string | null) => (id ? nomAgent.get(id) : "Non attribué");
   const dossierOuvert = ouvert ? vue.dossierParId.get(ouvert) : undefined;
+  const periode = libellePeriode(debut, fin);
 
   const carteAction = (x: Tache, retard = false) => <Carte key={x.id} contact={nomContact(x.opportunite_id)} dossier={vue.dossierParId.get(x.opportunite_id)}
-    titre={x.titre} ligne={quand(x.echeance_at, maintenant)} alerte={retard} agent={nomAgent.get(x.responsable_id)} onOuvrir={() => void ouvrir(x.opportunite_id)} />;
+    titre={x.titre} ligne={quand(x.echeance_at, maintenant)} alerte={retard} agent={nomAgent.get(x.responsable_id)} endormi={vue.endormis.get(x.opportunite_id)} onOuvrir={() => void ouvrir(x.opportunite_id)} />;
   const carteDossier = (x: Dossier, ligne: string, alerte: boolean) => <Carte key={x.id} contact={contacts.get(x.contact_id)?.nom ?? "…"} dossier={x}
-    ligne={ligne} alerte={alerte} agent={agentDe(x.owner_id)} onOuvrir={() => void ouvrir(x.id)} />;
+    ligne={ligne} alerte={alerte} agent={agentDe(x.owner_id)} endormi={vue.endormis.get(x.id)} onOuvrir={() => void ouvrir(x.id)} />;
 
   return <section className={`pl${chargement ? " pl-occupe" : ""}`} aria-busy={chargement}>
     <style>{styles}</style>
@@ -310,31 +348,34 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
     {/* Synthèse : le portefeuille en un chiffre et une barre, puis 4 chiffres d'activité. */}
     <div className="pl-synthese">
       <div className="pl-bloc pl-portefeuille">
-        <p className="pl-surtitre"><UsersRound size={14} /> {libelleSelection}</p>
+        <p className="pl-surtitre"><UsersRound size={14} /> {libelleSelection}<span className="pl-portee">à ce jour</span></p>
         <p className="pl-portefeuille-total"><strong>{nombre(k.actifs)}</strong> dossier{k.actifs > 1 ? "s" : ""} en cours{equipe && k.agents > 1 ? <span> · {k.agents} agents</span> : null}</p>
         <div className="pl-barre" aria-hidden="true">{k.repartition.filter((r) => r.n).map((r) => <span key={r.cle} className={`pl-c-${r.cle}`} style={{ width: `${(r.n / Math.max(1, k.actifs)) * 100}%` }} />)}</div>
         <ul className="pl-legende">{k.repartition.map((r) => <li key={r.cle}><span className={`pl-point pl-c-${r.cle}`} />{r.libelle} <strong>{nombre(r.n)}</strong></li>)}</ul>
+        <p className={`pl-endormis${k.endormis ? "" : " pl-vert"}`} title="Sans contact depuis plus longtemps que la durée normale de leur étape (Nouveau 2 j, Contact établi 7 j, Rendez-vous 5 j, Proposition 7 j, Négociation 5 j)">
+          <Hourglass size={13} />{k.endormis ? `${nombre(k.endormis)} dossier${k.endormis > 1 ? "s" : ""} endormi${k.endormis > 1 ? "s" : ""} : sans contact depuis trop longtemps` : "Aucun dossier endormi"}
+        </p>
       </div>
       <div className="pl-tuiles">
-        <Tuile titre="Actions faites" valeur={k.actions} precedent={k.actionsPrec} Icone={PhoneCall} aide="Appels, visites, rendez-vous, messages sur la période" />
-        <Tuile titre="En retard" valeur={k.retard} Icone={AlarmClock} alerte={k.retard > 0} sous={k.retard ? "à traiter en premier" : "rien en retard"} sousTon={k.retard ? undefined : "ok"} />
-        <Tuile titre="Nouveaux" valeur={k.nouveaux} precedent={k.nouveauxPrec} Icone={Inbox}
+        <Tuile titre="Actions faites" portee={periode} valeur={k.actions} precedent={k.actionsPrec} Icone={PhoneCall} aide="Appels, visites, rendez-vous, messages sur la période" />
+        <Tuile titre="En retard" portee="à ce jour" valeur={k.retard} Icone={AlarmClock} alerte={k.retard > 0} aide="Actions dont l’échéance est passée, quelle que soit la période"  sous={k.retard ? "à traiter en premier" : "rien en retard"} sousTon={k.retard ? undefined : "ok"} />
+        <Tuile titre="Nouveaux" portee={periode} aide="Dossiers créés sur la période" valeur={k.nouveaux} precedent={k.nouveauxPrec} Icone={Inbox}
           sous={k.nonContactes ? `${k.nonContactes} à contacter` : k.nouveaux ? "tous contactés" : undefined} sousTon={k.nonContactes ? "alerte" : "ok"} />
-        <Tuile titre="Gagnés" valeur={k.gagnes} precedent={k.gagnesPrec} Icone={Trophy} sous={taux === null ? "aucun dossier clos" : `${pourcent(taux)} de réussite`} />
+        <Tuile titre="Gagnés" portee={periode} aide="Dossiers gagnés sur la période" valeur={k.gagnes} precedent={k.gagnesPrec} Icone={Trophy} sous={taux === null ? "aucun dossier clos" : `${pourcent(taux)} de réussite`} />
       </div>
     </div>
 
     {/* Actions à mener : une carte = un dossier ; la toucher ouvre sa fiche. */}
     <div className="pl-bloc pl-tableau">
       <div className="pl-tableau-tete">
-        <div><h3>À mener</h3><p>Touchez une carte pour lire le dossier.</p></div>
+        <div><h3>À mener <span className="pl-portee">à ce jour</span></h3><p>Le travail en cours, toutes dates confondues ; seule la colonne Nouveaux suit la période. Touchez une carte pour lire le dossier.</p></div>
         <div className="pl-onglets" role="tablist">
           {([["priorite", "Par priorité"], ["chaleur", "Par chaleur"]] as const).map(([cle, titre]) =>
             <button key={cle} type="button" role="tab" aria-selected={onglet === cle} onClick={() => setOnglet(cle)}>{titre}</button>)}
         </div>
       </div>
       {onglet === "priorite" ? <div className="pl-colonnes">
-        <Colonne titre="Nouveaux" nombre={vue.listeNouveaux.length} ton="teal" vide="Aucun nouveau dossier sur la période">
+        <Colonne titre="Nouveaux" portee={periode} nombre={vue.listeNouveaux.length} ton="teal" vide="Aucun nouveau dossier sur la période">
           {vue.listeNouveaux.slice(0, PAR_COLONNE).map(({ dossier: x, contacte }) => carteDossier(x, `${contacte ? "Contacté" : "Pas encore contacté"} · créé ${quand(x.created_at, maintenant)}`, !contacte))}
         </Colonne>
         <Colonne titre="En retard" nombre={vue.priorite.retard.length} ton="rose" vide="Aucune action en retard 👍">{vue.priorite.retard.slice(0, PAR_COLONNE).map((x) => carteAction(x, true))}</Colonne>
@@ -358,16 +399,17 @@ export function CommercialPilotage({ client, organisationId, debut, fin, agents,
 
     {ouvert && <FenetreDossier dossier={dossierOuvert} contact={contacts.get(dossierOuvert?.contact_id ?? "")?.nom ?? "Dossier"}
       agent={agentDe(dossierOuvert?.owner_id ?? null)} fiche={fiches.get(ouvert)} prochaine={vue.tachesOuvertes.get(ouvert)}
-      nomAgent={nomAgent} maintenant={maintenant} onFermer={() => setOuvert(null)} onReessayer={() => void ouvrir(ouvert)} />}
+      nomAgent={nomAgent} maintenant={maintenant} endormi={vue.endormis.get(ouvert)} onFermer={() => setOuvert(null)} onReessayer={() => void ouvrir(ouvert)} />}
   </section>;
 }
 
-function Tuile({ titre, valeur, precedent, Icone, aide, sous, alerte = false, sousTon }: {
-  titre: string; valeur: number; precedent?: number; Icone: typeof Flame; aide?: string; sous?: string; alerte?: boolean; sousTon?: "alerte" | "ok";
+function Tuile({ titre, portee, valeur, precedent, Icone, aide, sous, alerte = false, sousTon }: {
+  titre: string; portee?: string; valeur: number; precedent?: number; Icone: typeof Flame; aide?: string; sous?: string; alerte?: boolean; sousTon?: "alerte" | "ok";
 }) {
   const evolution = precedent === undefined ? 0 : valeur - precedent;
   return <div className="pl-bloc pl-tuile" title={aide}>
     <p className="pl-tuile-titre"><span>{titre}</span><Icone size={15} /></p>
+    {portee && <p className="pl-tuile-portee">{portee}</p>}
     <p className={`pl-tuile-valeur${alerte ? " pl-rouge" : ""}`}>{nombre(valeur)}
       {evolution !== 0 && <span className={evolution > 0 ? "pl-hausse" : "pl-baisse"} title="Par rapport à la période précédente de même durée">
         {evolution > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{evolution > 0 ? "+" : ""}{nombre(evolution)}</span>}
@@ -376,9 +418,9 @@ function Tuile({ titre, valeur, precedent, Icone, aide, sous, alerte = false, so
   </div>;
 }
 
-function Colonne({ titre, nombre: n, ton, vide, children }: { titre: string; nombre: number; ton: string; vide: string; children: React.ReactNode }) {
+function Colonne({ titre, portee, nombre: n, ton, vide, children }: { titre: string; portee?: string; nombre: number; ton: string; vide: string; children: React.ReactNode }) {
   return <div className={`pl-colonne pl-t-${ton}`}>
-    <div className="pl-colonne-tete"><h4>{titre}</h4><span>{nombre(n)}</span></div>
+    <div className="pl-colonne-tete"><h4>{titre}{portee && <small>{portee}</small>}</h4><span>{nombre(n)}</span></div>
     <div className="pl-colonne-corps">
       {n === 0 ? <p className="pl-vide">{vide}</p> : children}
       {n > PAR_COLONNE && <p className="pl-plus">+ {nombre(n - PAR_COLONNE)} autres</p>}
@@ -395,13 +437,14 @@ function Pastille({ temperature }: { temperature: string | null }) {
   return <span className={`pl-pastille pl-p-${c.cle}`}><c.Icone size={11} />{c.libelle}</span>;
 }
 
-function Carte({ contact, dossier, titre, ligne, alerte, agent, onOuvrir }: {
-  contact: string; dossier?: Dossier; titre?: string; ligne: string; alerte: boolean; agent?: string; onOuvrir: () => void;
+function Carte({ contact, dossier, titre, ligne, alerte, agent, endormi, onOuvrir }: {
+  contact: string; dossier?: Dossier; titre?: string; ligne: string; alerte: boolean; agent?: string; endormi?: number; onOuvrir: () => void;
 }) {
-  return <button type="button" className="pl-carte" onClick={onOuvrir} aria-haspopup="dialog">
+  return <button type="button" className={`pl-carte${endormi ? " pl-carte-endormie" : ""}`} onClick={onOuvrir} aria-haspopup="dialog">
     <span className="pl-carte-haut"><strong>{contact}</strong><Pastille temperature={dossier?.temperature ?? null} /></span>
     {titre && <span className="pl-carte-titre">{titre}</span>}
     <span className={`pl-carte-ligne${alerte ? " pl-rouge" : ""}`}>{ligne}</span>
+    {endormi && <span className="pl-endormi" title="Sans contact depuis plus longtemps que la durée normale de cette étape"><Hourglass size={11} />Endormi · {endormi} j sans contact</span>}
     <span className="pl-carte-bas"><span>{dossier ? ETAPES[dossier.etape] ?? dossier.etape : ""}</span><Initiales nom={agent} /></span>
   </button>;
 }
@@ -420,9 +463,9 @@ function texteEchange(notes: string | null | undefined) {
   return texte;
 }
 
-function FenetreDossier({ dossier, contact, agent, fiche, prochaine, nomAgent, maintenant, onFermer, onReessayer }: {
+function FenetreDossier({ dossier, contact, agent, fiche, prochaine, nomAgent, maintenant, endormi, onFermer, onReessayer }: {
   dossier?: Dossier; contact: string; agent?: string; fiche?: Fiche | "erreur"; prochaine?: Tache;
-  nomAgent: Map<string, string>; maintenant: number; onFermer: () => void; onReessayer: () => void;
+  nomAgent: Map<string, string>; maintenant: number; endormi?: number; onFermer: () => void; onReessayer: () => void;
 }) {
   const fermerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -446,6 +489,7 @@ function FenetreDossier({ dossier, contact, agent, fiche, prochaine, nomAgent, m
         <div>
           <h3 id="pl-fenetre-titre">{contact}</h3>
           <p>{dossier && <Pastille temperature={dossier.temperature} />}{dossier && <span>{ETAPES[dossier.etape] ?? dossier.etape}</span>}<Initiales nom={agent} /></p>
+          {endormi && <p className="pl-endormi"><Hourglass size={12} />Endormi · {endormi} j sans contact</p>}
         </div>
         <button ref={fermerRef} type="button" className="pl-fermer" onClick={onFermer} aria-label="Fermer"><X size={18} /></button>
       </header>
@@ -569,6 +613,9 @@ const styles = `
 .pl-tuile { padding: 14px; }
 .pl-tuile-titre { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: var(--pl-gris); font-size: 12px; font-weight: 600; }
 .pl-tuile-titre svg { color: #94a3b8; }
+.pl-tuile-portee { margin-top: 1px !important; color: #94a3b8; font-size: 11px; }
+.pl-portee { margin-left: 6px; padding: 1px 7px; border-radius: 99px; background: #f1f5f9; color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; vertical-align: middle; }
+.pl-colonne-tete h4 small { display: block; color: #94a3b8; font-size: 11px; font-weight: 500; }
 .pl-tuile-valeur { display: flex; align-items: baseline; gap: 8px; margin-top: 6px !important; color: var(--pl-encre); font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .pl-hausse, .pl-baisse { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700; }
 .pl-hausse { color: #047857; } .pl-baisse { color: #be123c; }
@@ -604,6 +651,10 @@ const styles = `
 .pl-carte-titre { color: #1e293b; font-size: 12px; }
 .pl-carte-ligne { color: var(--pl-gris); font-size: 12px; }
 .pl-carte-ligne.pl-rouge { font-weight: 600; }
+.pl-carte-endormie { border-left: 3px solid #d97706; background: #fffdf7; }
+.pl-endormi { display: inline-flex; align-items: center; gap: 4px; justify-self: start; width: fit-content; margin: 2px 0 0 !important; padding: 1px 7px; border-radius: 99px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; }
+.pl-endormis { display: flex; align-items: center; gap: 6px; margin-top: 10px !important; color: #b45309; font-size: 12px; font-weight: 600; }
+.pl-endormis.pl-vert { color: #047857; }
 .pl-carte-bas { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; color: var(--pl-gris); font-size: 12px; }
 .pl-agent { display: inline-flex; align-items: center; gap: 5px; max-width: 55%; min-width: 0; color: #475569; font-size: 12px; }
 .pl-agent > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

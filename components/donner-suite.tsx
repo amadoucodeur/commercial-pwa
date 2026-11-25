@@ -19,6 +19,7 @@ type Props = {
   message: string;
   onFermer: () => void;
   onOuvrirFiche: () => void;
+  onAppeler?: () => void;
   onValider: (titre: string, echeance: Date) => void;
 };
 
@@ -26,7 +27,7 @@ type Props = {
  * « Donner une suite » à un dossier sans prochaine action : l'action et le créneau en deux touchers.
  * Pour clore le dossier (perdu, reporté, archivé), on passe par la fiche, qui demande le motif.
  */
-export function DonnerSuite({ contact, telephone, contexte, busy, message, onFermer, onOuvrirFiche, onValider }: Props) {
+export function DonnerSuite({ contact, telephone, contexte, busy, message, onFermer, onOuvrirFiche, onAppeler, onValider }: Props) {
   const [maintenant] = useState(() => new Date());
   const choix = useMemo(() => choixRapides(maintenant, maintenant), [maintenant]);
   const [titre, setTitre] = useState<string>("Rappeler");
@@ -79,7 +80,7 @@ export function DonnerSuite({ contact, telephone, contexte, busy, message, onFer
           </button>
         </form>
         <div className="suite-secondaire">
-          {telephone && <a href={`tel:${telephone}`}><Phone size={15} /> Appeler maintenant</a>}
+          {telephone && <a href={`tel:${telephone}`} onClick={onAppeler}><Phone size={15} /> Appeler maintenant</a>}
           <button type="button" onClick={onOuvrirFiche}><FolderOpen size={15} /> Ouvrir la fiche (clore, perdu, reporté…)</button>
         </div>
       </div>

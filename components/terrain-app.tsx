@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowRight, CalendarClock, CalendarDays, Check, ChevronDown, ChevronRight, CirclePlus,
   Clock3, CloudOff, CloudUpload, Compass, Crosshair, Globe2, Home, LogOut, MapPin, MapPinned,
-  Phone, RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingUp, Users, X, CalendarPlus, CircleAlert,
+  Phone, RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingUp, Users, X, CalendarPlus, CircleAlert, Hourglass,
 } from "lucide-react";
 import { ProspectForm } from "./prospect-form";
 import { ManagerLocalities } from "./manager-localities";
@@ -18,6 +18,8 @@ import { CommercialDashboard } from "./commercial-dashboard";
 import { CommercialActionsDetail } from "./commercial-actions-detail";
 import { ReprogrammerAction, noteReprogrammee } from "./reprogrammer-action";
 import { DonnerSuite } from "./donner-suite";
+import { ApresAppel, etapeApresAppel, type CompteAppel } from "./apres-appel";
+import { joursEndormi, RECUL_CONTACTS_JOURS } from "./pilotage";
 import { ContactsDossier } from "./contacts-dossier";
 import { DossierHistory } from "./dossier-history";
 import { MotifField, lireMotif } from "./motif-field";
@@ -105,8 +107,14 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
   // « Sans suite » : dossiers actifs de l'agent sans aucune prochaine action programmée.
   const [suite, setSuite] = useState<string | null>(null);
   const [filtreSansSuite, setFiltreSansSuite] = useState(false);
+  const [filtreEndormis, setFiltreEndormis] = useState(false);
+  // Dernier échange noté par dossier (60 derniers jours) : sert à repérer les dossiers endormis.
+  const [derniersContacts, setDerniersContacts] = useState<Map<string, string> | null>(null);
+  // Appel lancé depuis l'application : au retour, on demande comment il s'est passé.
+  const appelEnCours = useRef<{ dossierId: string; tacheId: string | null; depuis: number } | null>(null);
+  const [apresAppel, setApresAppel] = useState<{ dossierId: string; tacheId: string | null } | null>(null);
   const [completionDecision, setCompletionDecision] = useState("programmer");
-  const [completionEtape, setCompletionEtape] = useState("nouveau");
+  const [completionEtape, setCompletionEtape] = useState("perdu");
   const [etapeAConfirmer, setEtapeAConfirmer] = useState<string | null>(null);
   const [historiqueVersion, setHistoriqueVersion] = useState(0);
   const [creation, setCreation] = useState(false);
@@ -207,6 +215,16 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
         }
       }
       if (tachesResult && versions.taches === requestVersions.current.taches && !tachesResult.error) setTaches(tachesResult.data ?? []);
+      if (chargerDossiers) void client.from("crm_activites").select("opportunite_id,effectuee_at")
+        .eq("organisation_id", organisationId)
+        .gte("effectuee_at", new Date(Date.now() - RECUL_CONTACTS_JOURS * 86_400_000).toISOString())
+        .order("effectuee_at", { ascending: false }).limit(5000)
+        .then(({ data, error }) => {
+          if (error || !data) return;
+          const carte = new Map<string, string>();
+          for (const ligne of data) if (!carte.has(ligne.opportunite_id)) carte.set(ligne.opportunite_id, ligne.effectuee_at);
+          setDerniersContacts(carte);
+        });
       if (localiteResult && versions.localites === requestVersions.current.localites && !localiteResult.error) setLocalites((localiteResult.data ?? []) as Localite[]);
       if (accessResults && versions.access === requestVersions.current.access) {
         if (!accessResults[0].error) setProfilActif(!!accessResults[0].data);
@@ -347,6 +365,21 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     return () => { active = false; };
   }, [client, manager, managerRefreshKey, session.user.organisationId]);
   useEffect(() => { setEtapeAConfirmer(null); }, [selection]);
+  // Retour dans l'application après un appel lancé d'ici : on propose aussitôt le compte rendu.
+  useEffect(() => {
+    const retour = () => {
+      const appel = appelEnCours.current;
+      if (document.visibilityState !== "visible" || !appel) return;
+      appelEnCours.current = null;
+      const duree = Date.now() - appel.depuis;
+      // Moins de 3 s : l'appel n'est pas vraiment parti. Plus de 3 h : trop tard pour s'en souvenir.
+      if (duree < 3000 || duree > 3 * 3600_000) return;
+      setMessage("");
+      setApresAppel({ dossierId: appel.dossierId, tacheId: appel.tacheId });
+    };
+    document.addEventListener("visibilitychange", retour);
+    return () => document.removeEventListener("visibilitychange", retour);
+  }, []);
   // Droit commercial retiré mais vitrine conservée : l'accueil bascule vers l'espace vitrine.
   useEffect(() => {
     if (enLigne && refreshedSession?.accessToken && !refreshedSession.acces?.commercial) window.location.assign("/");
@@ -414,6 +447,20 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       .sort((a, b) => rang(a.temperature) - rang(b.temperature) || a.created_at.localeCompare(b.created_at));
   }, [dossiers, taches, session.user.id]);
   const idsSansSuite = useMemo(() => new Set(sansSuite.map((dossier) => dossier.id)), [sansSuite]);
+  // Dossiers endormis : sans contact depuis plus longtemps que la durée normale de leur étape (règle du pilotage).
+  const endormis = useMemo(() => {
+    const carte = new Map<string, number>();
+    if (!derniersContacts) return carte;
+    const maintenant = Date.now();
+    for (const dossier of dossiers) {
+      if (estLocal(dossier.id)) continue;
+      const contact = derniersContacts.get(dossier.id);
+      const jours = joursEndormi(dossier.etape, contact && contact > dossier.created_at ? contact : dossier.created_at, maintenant);
+      if (jours !== null) carte.set(dossier.id, jours);
+    }
+    return carte;
+  }, [dossiers, derniersContacts]);
+  const mesEndormis = useMemo(() => dossiers.filter((dossier) => endormis.has(dossier.id) && dossier.owner_id === session.user.id).length, [dossiers, endormis, session.user.id]);
   const dossierActif = selection ? dossierParId.get(selection) : null;
   const contactActif = dossierActif ? contactParId.get(dossierActif.contact_id) : null;
   const prenom = session.user.name?.split(/[\s@._-]/)[0] || "vous";
@@ -433,7 +480,9 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       && (!criteres.fin || jour <= criteres.fin);
   }), [dossiers, contactParId, localiteParId, recherche, manager]);
   const dossiersVisiblesDesktop = useMemo(() => filtrerDossiersDesktop(filtresDesktop), [filtrerDossiersDesktop, filtresDesktop]);
-  const dossiersVisibles = filtreSansSuite ? dossiersVisiblesDesktop.filter((dossier) => idsSansSuite.has(dossier.id)) : dossiersVisiblesDesktop;
+  const dossiersVisibles = filtreSansSuite ? dossiersVisiblesDesktop.filter((dossier) => idsSansSuite.has(dossier.id))
+    : filtreEndormis ? dossiersVisiblesDesktop.filter((dossier) => endormis.has(dossier.id)).sort((a, b) => (endormis.get(b.id) ?? 0) - (endormis.get(a.id) ?? 0))
+      : dossiersVisiblesDesktop;
   const apercuFiltresDesktop = filtresOuverts ? filtrerDossiersDesktop(brouillonFiltres).length : dossiersVisiblesDesktop.length;
   const nombreFiltresDesktop = Object.values(filtresDesktop).filter(Boolean).length;
   const modifierFiltreDesktop = (champ: keyof FiltresDesktop, valeur: string) =>
@@ -524,6 +573,10 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     const echeance = decision === "programmer" ? new Date(`${String(form.get("echeance"))}:00Z`).toISOString() : null;
     const etape = decision === "classer" ? String(form.get("etape")) : null;
     const motif = motifsPour(etape, decision === "archiver") ? lireMotif(form) : null;
+    // Avec une prochaine action, le dossier peut aussi avancer d'étape (jamais clos sans raison).
+    const dossierTache = dossierParId.get(tache.opportunite_id);
+    const avance = decision === "programmer" ? String(form.get("etape_avance") || "") : "";
+    const etapeAvance = avance && dossierTache && avance !== dossierTache.etape ? avance : null;
     const success = await executer({ type: "rpc", fn: "crm_clore_action", libelle: `Compte rendu « ${tache.titre} »`, args: {
       p_tache_id: tache.id,
       p_type_activite: String(form.get("type")),
@@ -535,7 +588,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       p_etape: etape,
       // Envoyé seulement s'il est requis, pour rester compatible avec l'ancienne signature serveur.
       ...(motif ? { p_motif: motif } : {}),
-    } }, "Action terminée et suite enregistrée dans l’historique.", "crm", () => {
+    } }, "Action terminée et suite enregistrée dans l’historique.", etapeAvance ? "none" : "crm", () => {
       setTaches((courantes) => courantes.filter((item) => item.id !== tache.id
         && !(decision === "archiver" && item.opportunite_id === tache.opportunite_id)));
       if (decision === "programmer" && prochaineAction && echeance) {
@@ -543,7 +596,13 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       }
       if (decision === "archiver") setDossiers((courants) => courants.filter((item) => item.id !== tache.opportunite_id));
       if (etape) setDossiers((courants) => courants.map((item) => item.id === tache.opportunite_id ? { ...item, etape } : item));
+      setDerniersContacts((avant) => new Map(avant ?? []).set(tache.opportunite_id, new Date().toISOString()));
     });
+    if (success && etapeAvance) {
+      await executer({ type: "update", table: "crm_opportunites", ligneId: tache.opportunite_id, valeurs: { etape: etapeAvance }, libelle: `Étape « ${label(etapes, etapeAvance)} »` },
+        `Action terminée. Dossier passé en « ${label(etapes, etapeAvance)} ».`, "crm",
+        () => setDossiers((courants) => courants.map((item) => item.id === tache.opportunite_id ? { ...item, etape: etapeAvance } : item)));
+    }
     if (success) { setCompletion(null); setHistoriqueVersion((value) => value + 1); }
   }
 
@@ -565,7 +624,16 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       ? { type: "rpc", fn: "crm_changer_etape", args: { p_id: dossier.id, p_etape: etape, p_motif: motif }, libelle: `Étape « ${label(etapes, etape)} »` }
       : { type: "update", table: "crm_opportunites", ligneId: dossier.id, valeurs: { etape }, libelle: `Étape « ${label(etapes, etape)} »` };
     void executer(operation, "Étape mise à jour.", "none", local).then((success) => {
-      if (success) { setEtapeAConfirmer(null); setHistoriqueVersion((value) => value + 1); }
+      if (!success) return;
+      setEtapeAConfirmer(null);
+      setHistoriqueVersion((value) => value + 1);
+      // Toujours une prochaine action : un dossier en cours sans action ouverte demande aussitôt sa suite.
+      const enCours = !["gagne", "perdu", "reporte"].includes(etape);
+      if (enCours && dossier.owner_id && !taches.some((tache) => tache.opportunite_id === dossier.id)) {
+        setSelection(null);
+        setMessage(`Étape « ${label(etapes, etape)} » enregistrée. Quelle est la suite ?`);
+        setSuite(dossier.id);
+      }
     });
   }
 
@@ -584,12 +652,73 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
   }
 
+  /** À poser sur chaque lien « Appeler » d'un dossier. */
+  const noterAppel = (dossierId: string, tacheId: string | null = null) => {
+    if (estLocal(dossierId)) return;
+    appelEnCours.current = { dossierId, tacheId, depuis: Date.now() };
+  };
+
+  // Compte rendu d'un appel : l'échange, puis la suite (action datée ou clôture). Avec une action ouverte,
+  // tout passe par crm_clore_action ; sinon l'échange est noté seul, puis la suite est enregistrée.
+  async function enregistrerAppel(dossier: Dossier, tacheId: string | null, compte: CompteAppel) {
+    const tache = (tacheId ? taches.find((item) => item.id === tacheId) : null)
+      ?? taches.find((item) => item.opportunite_id === dossier.id) ?? null;
+    const suite = compte.suite;
+    const avance = suite.type === "programmer" ? etapeApresAppel(compte.issue, dossier.etape) : null;
+    const echeance = suite.type === "programmer" ? suite.echeance.toISOString() : null;
+    const notes = compte.notes || null;
+    const marquerContact = () => setDerniersContacts((avant) => new Map(avant ?? []).set(dossier.id, new Date().toISOString()));
+    let ok: boolean;
+    if (tache) {
+      ok = await executer({ type: "rpc", fn: "crm_clore_action", libelle: `Appel « ${tache.titre} »`, args: {
+        p_tache_id: tache.id, p_type_activite: "appel", p_resultat: compte.resultat, p_notes: notes,
+        p_decision: suite.type === "programmer" ? "programmer" : "classer",
+        p_prochaine_action: suite.type === "programmer" ? suite.titre : null,
+        p_echeance_at: echeance,
+        p_etape: suite.type === "clore" ? suite.etape : null,
+        ...(suite.type === "clore" && suite.motif ? { p_motif: suite.motif } : {}),
+      } }, "Appel noté.", avance ? "none" : "crm", () => {
+        setTaches((courantes) => courantes.filter((item) => item.id !== tache.id));
+        if (suite.type === "programmer" && echeance) ajouterTacheLocale({ id: idLocal(), opportunite_id: dossier.id, titre: suite.titre, echeance_at: echeance, notes: null });
+        if (suite.type === "clore") setDossiers((courants) => courants.map((item) => item.id === dossier.id ? { ...item, etape: suite.etape } : item));
+        marquerContact();
+      });
+    } else {
+      ok = await executer({ type: "insert", table: "crm_activites", libelle: `Appel ${contactParId.get(dossier.contact_id)?.nom ?? ""}`.trim(), valeurs: {
+        organisation_id: session.user.organisationId, opportunite_id: dossier.id,
+        auteur_id: session.user.id === session.user.organisationId ? null : session.user.id,
+        type_activite: "appel", resultat: compte.resultat, notes,
+      } }, "Appel noté.", "none", marquerContact);
+      if (ok && suite.type === "programmer" && echeance) {
+        const responsable = dossier.owner_id;
+        ok = !!responsable && await executer({ type: "insert", table: "crm_taches", libelle: `Action « ${suite.titre} »`, valeurs: {
+          organisation_id: session.user.organisationId, opportunite_id: dossier.id, responsable_id: responsable,
+          createur_id: session.user.id, titre: suite.titre, echeance_at: echeance,
+        } }, "Appel noté et suite programmée.", avance ? "none" : "taches", () => {
+          if (responsable === session.user.id) ajouterTacheLocale({ id: idLocal(), opportunite_id: dossier.id, titre: suite.titre, echeance_at: echeance, notes: null });
+        });
+        if (!responsable) setMessage("Appel noté. Attribuez ce dossier à un agent pour programmer la suite.");
+      } else if (ok && suite.type === "clore") {
+        ok = await executer(suite.motif
+          ? { type: "rpc", fn: "crm_changer_etape", args: { p_id: dossier.id, p_etape: suite.etape, p_motif: suite.motif }, libelle: `Étape « ${label(etapes, suite.etape)} »` }
+          : { type: "update", table: "crm_opportunites", ligneId: dossier.id, valeurs: { etape: suite.etape }, libelle: `Étape « ${label(etapes, suite.etape)} »` },
+        "Appel noté, dossier clos.", "crm", () => setDossiers((courants) => courants.map((item) => item.id === dossier.id ? { ...item, etape: suite.etape } : item)));
+      }
+    }
+    if (ok && avance) {
+      await executer({ type: "update", table: "crm_opportunites", ligneId: dossier.id, valeurs: { etape: avance }, libelle: `Étape « ${label(etapes, avance)} »` },
+        `Appel noté. Dossier passé en « ${label(etapes, avance)} ».`, "crm",
+        () => setDossiers((courants) => courants.map((item) => item.id === dossier.id ? { ...item, etape: avance } : item)));
+    }
+    if (ok) { setApresAppel(null); setHistoriqueVersion((value) => value + 1); }
+  }
+
   function carteSansSuite(dossier: Dossier) {
     const contact = contactParId.get(dossier.contact_id);
     return <article className="task-card sans-suite-card" key={dossier.id}>
       <div className="task-leading"><span className="task-icon"><CircleAlert size={18} /></span><div><strong>{contact?.nom ?? "Dossier"}</strong><small>{label(etapes, dossier.etape)}{dossier.temperature ? ` · ${label([["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]], dossier.temperature)}` : ""} · créé le {dateTime(dossier.created_at)}</small></div></div>
       <div className="task-actions">
-        {contact?.telephone && <a href={`tel:${contact.telephone}`}><Phone size={16} /> Appeler</a>}
+        {contact?.telephone && <a href={`tel:${contact.telephone}`} onClick={() => noterAppel(dossier.id)}><Phone size={16} /> Appeler</a>}
         <button onClick={() => setSelection(dossier.id)}>Voir la fiche <ChevronRight size={15} /></button>
         <button className="finish-action" onClick={() => { setMessage(""); setSuite(dossier.id); }}><CalendarPlus size={16} /> Donner une suite</button>
       </div>
@@ -617,11 +746,11 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       <div className="task-leading"><span className="task-icon"><CalendarDays size={18} /></span><div><strong>{tache.titre}</strong><small>{contact?.nom ?? "Dossier"} · {dateTime(tache.echeance_at)}</small></div></div>
       {tache.notes && <p className="task-note">{tache.notes}</p>}
       <div className="task-actions">
-        {contact?.telephone && <a href={`tel:${contact.telephone}`}><Phone size={16} /> Appeler</a>}
+        {contact?.telephone && <a href={`tel:${contact.telephone}`} onClick={() => noterAppel(tache.opportunite_id, estLocal(tache.id) ? null : tache.id)}><Phone size={16} /> Appeler</a>}
         <button onClick={() => setSelection(tache.opportunite_id)}>Voir la fiche <ChevronRight size={15} /></button>
         {estLocal(tache.id) || estLocal(tache.opportunite_id)
           ? <span className="pending-action"><CloudUpload size={15} /> En attente d’envoi</span>
-          : <><button onClick={() => { setMessage(""); setReprogrammation(tache); }}><CalendarClock size={15} /> Reprogrammer</button><button className="finish-action" onClick={() => { setCompletionDecision("programmer"); setCompletionEtape("nouveau"); setMessage(""); setCompletion(tache); }}><Check size={16} /> Terminer</button></>}
+          : <><button onClick={() => { setMessage(""); setReprogrammation(tache); }}><CalendarClock size={15} /> Reprogrammer</button><button className="finish-action" onClick={() => { setCompletionDecision("programmer"); setCompletionEtape("perdu"); setMessage(""); setCompletion(tache); }}><Check size={16} /> Terminer</button></>}
       </div>
     </article>;
   }
@@ -648,7 +777,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
     <header className="topbar"><div className="topbar-inner"><div className="brand"><Image src="/icon-192.png" alt="" width={38} height={38} priority /><span>Trabad Commercial</span></div><div className="topbar-actions">{(!enLigne || fileAttente.length > 0) && <span className={`sync-chip ${enLigne ? "" : "offline"}`} role="status">{enLigne ? <CloudUpload size={15} /> : <CloudOff size={15} />}{enLigne ? synchroEnCours ? "Envoi…" : `${fileAttente.length} en attente` : `Hors ligne${fileAttente.length ? ` · ${fileAttente.length}` : ""}`}</span>}<button className="icon-button" onClick={() => vue === "vitrine" ? setVitrineRefreshKey((value) => value + 1) : vue === "pilotage" || vue === "dossiers" && gestionAvancee ? setManagerRefreshKey((value) => value + 1) : void actualiser()} aria-label="Actualiser"><RefreshCw size={19} /></button></div></div></header>
     <aside className="desktop-sidebar" aria-label="Espace commercial"><div className="desktop-sidebar-inner"><p className="desktop-sidebar-label">ESPACE COMMERCIAL</p><nav aria-label="Navigation principale">{navigation.map(([key, Icon, title]) => <button key={key} type="button" className={vue === key || key === "compte" && vue === "localites" ? "active" : ""} aria-current={vue === key ? "page" : undefined} onClick={() => { setVue(key); setSelection(null); }}><Icon size={19} /><span>{title}</span><ChevronRight size={16} className="desktop-nav-chevron" /></button>)}</nav><div className="desktop-sidebar-foot"><span className="desktop-sidebar-avatar">{(session.user.name ?? "C").slice(0, 1).toUpperCase()}</span><span><strong>{session.user.name || "Commercial"}</strong><small>{manager ? "Responsable commercial" : "Agent commercial"}</small></span></div></div></aside>
     <main className={`content view-${vue}`}>
-      {message && !creation && !selection && !completion && !reprogrammation && !suite && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
+      {message && !creation && !selection && !completion && !reprogrammation && !suite && !apresAppel && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Fermer"><X size={16} /></button></div>}
       {loading ? <div className="loading"><Sparkles size={23} /> Votre espace se prépare…</div> : <>
         {vue === "accueil" && <>
           <section className="hero"><div className="hero-decoration" /><p className="eyebrow light">AUJOURD’HUI SUR LE TERRAIN</p><h1>Bonjour, {prenom}<span>✦</span></h1><p>Chaque rencontre est une opportunité.</p><div className="hero-bottom"><span><CalendarDays size={15} /> {new Intl.DateTimeFormat("fr-FR", { dateStyle: "full", timeZone: "Africa/Abidjan" }).format(new Date())}</span></div></section>
@@ -656,6 +785,11 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
           {sansSuite.length > 0 && <button className="sans-suite-cta" onClick={() => { setFiltreSansSuite(true); setVue("dossiers"); setSelection(null); }}>
             <span className="sans-suite-icone"><CircleAlert size={20} /></span>
             <span><strong>{sansSuite.length} dossier{sansSuite.length > 1 ? "s" : ""} sans suite</strong><small>Aucune prochaine action prévue : donnez-leur une suite</small></span>
+            <ArrowRight size={18} />
+          </button>}
+          {mesEndormis > 0 && <button className="sans-suite-cta endormis-cta" onClick={() => { setFiltreEndormis(true); setFiltreSansSuite(false); setVue("dossiers"); setSelection(null); }}>
+            <span className="sans-suite-icone"><Hourglass size={20} /></span>
+            <span><strong>{mesEndormis} dossier{mesEndormis > 1 ? "s" : ""} endormi{mesEndormis > 1 ? "s" : ""}</strong><small>Sans contact depuis trop longtemps : un appel les réveille</small></span>
             <ArrowRight size={18} />
           </button>}
           <button className="new-cta" disabled={!profilActif && !manager} onClick={() => { setMessage(""); setCreation(true); }}><span><CirclePlus size={22} /> Nouveau prospect</span><ArrowRight size={19} /></button>
@@ -670,7 +804,8 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
           {manager && gestionAvancee ? <ManagerWorkspace mode="prospects" initialAgent={agentGestion} agentsDisponibles={agentsTous} client={client} organisationId={session.user.organisationId} refreshKey={managerRefreshKey} localites={localites} onCreate={() => { setMessage(""); setCreation(true); }} onTeamChanged={() => setManagerRefreshKey((value) => value + 1)} /> : <>
           <div className="page-title"><p className="eyebrow">{manager ? "PORTEFEUILLE DE L’ÉQUIPE" : "VOTRE PORTEFEUILLE"}</p><h1>Les dossiers <span>{dossiers.length}{dossiersSuivants ? "+" : ""}</span></h1><p>Retrouvez vite un contact et poursuivez le suivi.</p></div>
           <div className="search-field"><Search size={18} /><input value={recherche} onChange={(event) => setRecherche(event.target.value)} placeholder="Nom, téléphone, commune…" aria-label="Rechercher un dossier" /></div>
-          <div className="chips sans-suite-chips" role="group" aria-label="Filtre rapide"><button type="button" className={!filtreSansSuite ? "active" : ""} aria-pressed={!filtreSansSuite} onClick={() => setFiltreSansSuite(false)}>Tous</button><button type="button" className={`chip-alerte${filtreSansSuite ? " active" : ""}`} aria-pressed={filtreSansSuite} onClick={() => setFiltreSansSuite(true)}><CircleAlert size={14} /> Sans suite · {sansSuite.length}</button></div>
+          <div className="chips sans-suite-chips" role="group" aria-label="Filtre rapide"><button type="button" className={!filtreSansSuite && !filtreEndormis ? "active" : ""} aria-pressed={!filtreSansSuite && !filtreEndormis} onClick={() => { setFiltreSansSuite(false); setFiltreEndormis(false); }}>Tous</button><button type="button" className={`chip-alerte${filtreSansSuite ? " active" : ""}`} aria-pressed={filtreSansSuite} onClick={() => { setFiltreSansSuite(true); setFiltreEndormis(false); }}><CircleAlert size={14} /> Sans suite · {sansSuite.length}</button>{endormis.size > 0 && <button type="button" className={`chip-endormi${filtreEndormis ? " active" : ""}`} aria-pressed={filtreEndormis} onClick={() => { setFiltreEndormis(true); setFiltreSansSuite(false); }}><Hourglass size={14} /> Endormis · {endormis.size}</button>}</div>
+          {filtreEndormis && <p className="field-help">Dossiers sans contact depuis trop longtemps pour leur étape (Nouveau 2 j, Contact établi 7 j, Rendez-vous 5 j, Proposition 7 j, Négociation 5 j). Les plus anciens d’abord : un appel les réveille.</p>}
           {filtreSansSuite && <p className="field-help">Vos dossiers en cours sans aucune action programmée. Les chauds d’abord. Touchez « Donner une suite » pour programmer la prochaine action.</p>}
           <div className="desktop-dossier-filters"><button ref={boutonFiltresRef} type="button" className="desktop-filter-trigger" aria-haspopup="dialog" aria-expanded={filtresOuverts} onClick={ouvrirFiltres}><SlidersHorizontal size={17} /> Filtres {nombreFiltresDesktop > 0 && <em>{nombreFiltresDesktop}</em>}<ChevronDown size={16} /></button><button ref={boutonFiltresMobileRef} type="button" className="mobile-filter-trigger" aria-haspopup="dialog" aria-expanded={filtresOuverts} onClick={ouvrirFiltres}><SlidersHorizontal size={17} /> Filtres {nombreFiltresDesktop > 0 && <em>{nombreFiltresDesktop}</em>}<ChevronDown size={16} /></button>{filtresOuverts && <div className="desktop-filter-backdrop" onClick={fermerFiltres}><section className="desktop-filter-dialog" role="dialog" aria-modal="true" aria-labelledby="dossier-filters-title" onClick={(event) => event.stopPropagation()}><div className="desktop-filter-dialog-head"><div><p className="eyebrow">AFFINER LA LISTE</p><h2 id="dossier-filters-title">Filtrer les dossiers</h2><span>{apercuFiltresDesktop} résultat{apercuFiltresDesktop > 1 ? "s" : ""} correspondant{apercuFiltresDesktop > 1 ? "s" : ""}</span></div><button type="button" onClick={fermerFiltres} aria-label="Fermer les filtres"><X size={19} /></button></div><div className="desktop-filter-grid">
             <label>Étape<select autoFocus value={brouillonFiltres.etape} onChange={(event) => modifierFiltreDesktop("etape", event.target.value)}><option value="">Toutes les étapes</option>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
@@ -683,7 +818,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
             <label>Créé jusqu’au<input type="date" value={brouillonFiltres.fin} min={brouillonFiltres.debut || undefined} onChange={(event) => modifierFiltreDesktop("fin", event.target.value)} /></label>
           </div><div className="desktop-filter-dialog-footer"><button type="button" className="desktop-filter-reset" onClick={() => setBrouillonFiltres(filtresDesktopVides)}>Réinitialiser</button><div><button type="button" className="desktop-filter-cancel" onClick={fermerFiltres}>Annuler</button><button type="button" className="desktop-filter-apply" disabled={!!brouillonFiltres.debut && !!brouillonFiltres.fin && brouillonFiltres.debut > brouillonFiltres.fin} onClick={() => { setFiltresDesktop(brouillonFiltres); fermerFiltres(); }}>Afficher {apercuFiltresDesktop} dossier{apercuFiltresDesktop > 1 ? "s" : ""}</button></div></div></section></div>}</div>
           {desktopLayout ? <DesktopDossierTable dossiers={dossiersVisibles} contacts={contactParId} localites={localiteParId} agents={agentParId} manager={manager} onOpen={setSelection} />
-            : <div className="dossier-list">{dossiersVisibles.map((dossier) => { const contact = contactParId.get(dossier.contact_id); const commune = dossier.localite_id ? localiteParId.get(dossier.localite_id)?.nom : contact?.localisation; const carte = <button className="dossier-card" key={dossier.id} onClick={() => setSelection(dossier.id)}><span className="avatar">{(contact?.nom ?? "?").slice(0, 1).toUpperCase()}</span><span className="dossier-main"><strong>{contact?.nom ?? "Contact"}</strong><span>{(dossier.services ?? [dossier.service]).map((service) => label(services, service)).join(" · ")}</span><small><MapPin size={12} /> {commune || "Commune à préciser"}</small></span><span className="dossier-right"><span className="stage" data-stage={dossier.etape}>{label(etapes, dossier.etape)}</span>{idsSansSuite.has(dossier.id) && <span className="sans-suite-badge">Sans suite</span>}<ChevronRight size={18} /></span></button>; return idsSansSuite.has(dossier.id) ? <div className="carte-avec-suite" key={dossier.id}>{carte}<button type="button" className="suite-bouton" onClick={() => { setMessage(""); setSuite(dossier.id); }}><CalendarPlus size={16} /> Donner une suite</button></div> : carte; })}</div>}
+            : <div className="dossier-list">{dossiersVisibles.map((dossier) => { const contact = contactParId.get(dossier.contact_id); const commune = dossier.localite_id ? localiteParId.get(dossier.localite_id)?.nom : contact?.localisation; const carte = <button className="dossier-card" key={dossier.id} onClick={() => setSelection(dossier.id)}><span className="avatar">{(contact?.nom ?? "?").slice(0, 1).toUpperCase()}</span><span className="dossier-main"><strong>{contact?.nom ?? "Contact"}</strong><span>{(dossier.services ?? [dossier.service]).map((service) => label(services, service)).join(" · ")}</span><small><MapPin size={12} /> {commune || "Commune à préciser"}</small></span><span className="dossier-right"><span className="stage" data-stage={dossier.etape}>{label(etapes, dossier.etape)}</span>{idsSansSuite.has(dossier.id) && <span className="sans-suite-badge">Sans suite</span>}{endormis.has(dossier.id) && <span className="endormi-badge" title="Sans contact depuis trop longtemps pour cette étape"><Hourglass size={11} /> {endormis.get(dossier.id)} j</span>}<ChevronRight size={18} /></span></button>; return idsSansSuite.has(dossier.id) ? <div className="carte-avec-suite" key={dossier.id}>{carte}<button type="button" className="suite-bouton" onClick={() => { setMessage(""); setSuite(dossier.id); }}><CalendarPlus size={16} /> Donner une suite</button></div> : carte; })}</div>}
           {dossiersVisibles.length === 0 && <div className="empty mobile-dossier-empty"><Users size={26} /><strong>Aucun dossier trouvé</strong><p>{dossiersSuivants ? "Chargez les dossiers suivants pour poursuivre la recherche." : "Changez de filtre ou ajoutez un prospect."}</p></div>}
           {dossiersSuivants && <div className="dossier-load-more"><span>La recherche porte sur les {dossiers.length} dossiers chargés.</span><button type="button" disabled={chargementSuite} onClick={() => void chargerSuiteDossiers()}>{chargementSuite ? "Chargement…" : "Charger les dossiers suivants"}<ArrowRight size={16} /></button></div>}
           </>}
@@ -708,9 +843,9 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
       {dossierLocal && <div className="warning"><CloudUpload size={16} /> Dossier enregistré sur l’appareil. Il sera envoyé au retour du réseau ; vous pourrez ensuite le modifier.</div>}
       {idsSansSuite.has(dossierActif.id) && <div className="sans-suite-bandeau"><CircleAlert size={17} /><span>Aucune prochaine action n’est prévue pour ce dossier.</span><button type="button" onClick={() => { setMessage(""); setSuite(dossierActif.id); }}>Donner une suite</button></div>}
       <div className="detail-avatar">{(contactActif?.nom ?? "?").slice(0, 1).toUpperCase()}</div><h2>{contactActif?.nom ?? "Contact"}</h2><p>{(dossierActif.services ?? [dossierActif.service]).map((service) => label(services, service)).join(" · ")}</p>
-      <div className="detail-chips"><span className="stage" data-stage={dossierActif.etape}>{label(etapes, dossierActif.etape)}</span>{dossierActif.localite_id && <span className="place-chip"><MapPin size={13} /> {localiteParId.get(dossierActif.localite_id)?.nom ?? contactActif?.localisation}</span>}</div>
+      <div className="detail-chips"><span className="stage" data-stage={dossierActif.etape}>{label(etapes, dossierActif.etape)}</span>{endormis.has(dossierActif.id) && <span className="endormi-badge"><Hourglass size={12} /> Endormi · {endormis.get(dossierActif.id)} j sans contact</span>}{dossierActif.localite_id && <span className="place-chip"><MapPin size={13} /> {localiteParId.get(dossierActif.localite_id)?.nom ?? contactActif?.localisation}</span>}</div>
       <div className="detail-block"><small>QUALIFICATION</small><p>Source : {label(sources, dossierActif.source)} · Température : {label([["froid", "Froid"], ["tiede", "Tiède"], ["chaud", "Chaud"]], dossierActif.temperature ?? "À qualifier")}</p></div>
-      {contactActif?.telephone && <a className="call-button" href={`tel:${contactActif.telephone}`}><Phone size={18} /> Appeler {contactActif.telephone}</a>}
+      {contactActif?.telephone && <a className="call-button" href={`tel:${contactActif.telephone}`} onClick={() => noterAppel(dossierActif.id)}><Phone size={18} /> Appeler {contactActif.telephone}</a>}
       {!dossierLocal && <div className="detail-block"><ContactsDossier client={client} dossierId={dossierActif.id} modifiable={!!dossierActif.owner_id} refreshKey={historiqueVersion} /></div>}
       {dossierActif.besoin && <div className="detail-block"><small>BESOIN EXPRIMÉ</small><p>{dossierActif.besoin}</p></div>}
       {(dossierActif.type_bien || dossierActif.adresse_bien) && <div className="detail-block"><small>BIEN CONCERNÉ</small><p>{[dossierActif.type_bien, dossierActif.adresse_bien].filter(Boolean).join(" · ")}</p></div>}
@@ -730,7 +865,17 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
         busy={busy} message={message}
         onFermer={() => setSuite(null)}
         onOuvrirFiche={() => { setSuite(null); setSelection(dossier.id); }}
+        onAppeler={() => { noterAppel(dossier.id); setSuite(null); }}
         onValider={(titre, echeance) => void programmerSuite(dossier.id, titre, echeance)} />;
+    })()}
+    {apresAppel && (() => {
+      const dossier = dossierParId.get(apresAppel.dossierId);
+      if (!dossier) return null;
+      const tache = apresAppel.tacheId ? taches.find((item) => item.id === apresAppel.tacheId) : taches.find((item) => item.opportunite_id === dossier.id);
+      return <ApresAppel key={apresAppel.dossierId} contact={contactParId.get(dossier.contact_id)?.nom ?? "Dossier"} etape={dossier.etape}
+        action={tache?.titre} busy={busy} message={message}
+        onFermer={() => { setApresAppel(null); setMessage(""); }}
+        onValider={(compte) => void enregistrerAppel(dossier, tache?.id ?? null, compte)} />;
     })()}
     {reprogrammation && (() => {
       const dossier = dossierParId.get(reprogrammation.opportunite_id);
@@ -740,7 +885,7 @@ export function TerrainApp({ initialSession }: { initialSession: Session }) {
         onFermer={() => setReprogrammation(null)}
         onValider={(echeance, motif) => void reprogrammerTache(reprogrammation, echeance, motif)} />;
     })()}
-    {completion && <div className="sheet-backdrop" onClick={() => setCompletion(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Terminer l’action" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>COMPTE RENDU</span><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{completion.titre}</h2><p>Notez le résultat et choisissez la suite. Tout sera conservé dans l’historique.</p>{message && <div className="toast" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void terminerTache(event)}><label className="field">Type d’échange<select name="type"><option value="appel">Appel</option><option value="visite">Visite</option><option value="rendez_vous">Rendez-vous</option><option value="message">Message</option><option value="note">Note</option></select></label><label className="field">Résultat<input name="resultat" required autoFocus placeholder="Ex. rendez-vous confirmé" /></label><label className="field">Note complémentaire<textarea name="notes" rows={2} placeholder="Facultatif" /></label><label className="field">Suite à donner<select name="decision" value={completionDecision} onChange={(event) => setCompletionDecision(event.target.value)}><option value="programmer">Programmer la prochaine action</option><option value="archiver">Archiver le dossier</option><option value="classer">Classer le dossier</option></select></label>{completionDecision === "programmer" && <><label className="field">Prochaine action<select name="prochaine_action" required>{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label></>}{completionDecision === "classer" && <label className="field">Classer à l’étape<select name="etape" value={completionEtape} onChange={(event) => setCompletionEtape(event.target.value)}>{etapes.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>}{completionDecision === "classer" && motifsPour(completionEtape) && <MotifField key={completionEtape} options={motifsPour(completionEtape)!} label={completionEtape === "perdu" ? "Pourquoi le dossier est-il perdu ?" : "Pourquoi le dossier est-il reporté ?"} />}{completionDecision === "archiver" && <><MotifField options={motifsPour(null, true)!} label="Pourquoi archiver ce dossier ?" /><p className="field-help">Les autres actions ouvertes de ce dossier seront annulées.</p></>}<button className="primary-button" disabled={busy}>Terminer l’action <Check size={18} /></button></form></div></section></div>}
+    {completion && <div className="sheet-backdrop" onClick={() => setCompletion(null)}><section className="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Terminer l’action" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Retour"><ArrowLeft size={20} /></button><span>COMPTE RENDU</span><button className="icon-button" onClick={() => setCompletion(null)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><h2>{completion.titre}</h2><p>Notez le résultat et choisissez la suite. Tout sera conservé dans l’historique.</p>{message && <div className="toast" role="status">{message}</div>}<form className="new-form" onSubmit={(event) => void terminerTache(event)}><label className="field">Type d’échange<select name="type"><option value="appel">Appel</option><option value="visite">Visite</option><option value="rendez_vous">Rendez-vous</option><option value="message">Message</option><option value="note">Note</option></select></label><label className="field">Résultat<input name="resultat" required autoFocus placeholder="Ex. rendez-vous confirmé" /></label><label className="field">Note complémentaire<textarea name="notes" rows={2} placeholder="Facultatif" /></label><label className="field">Suite à donner<select name="decision" value={completionDecision} onChange={(event) => setCompletionDecision(event.target.value)}><option value="programmer">Programmer la prochaine action</option><option value="classer">Clore le dossier (gagné, perdu, reporté)</option><option value="archiver">Archiver le dossier</option></select></label>{completionDecision === "programmer" && <><label className="field">Prochaine action<select name="prochaine_action" required>{actions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="field">Date et heure<input name="echeance" type="datetime-local" defaultValue={nextReminder()} required /></label>{(() => { const etapeActuelle = dossierParId.get(completion.opportunite_id)?.etape ?? "nouveau"; return <label className="field">Étape du dossier<select name="etape_avance" defaultValue={etapeActuelle}>{etapes.filter(([value]) => !["gagne", "perdu", "reporte"].includes(value) || value === etapeActuelle).map(([value, title]) => <option key={value} value={value}>{title}{value === etapeActuelle ? " (actuelle)" : ""}</option>)}</select></label>; })()}</>}{completionDecision === "classer" && <label className="field">Clore comme<select name="etape" value={completionEtape} onChange={(event) => setCompletionEtape(event.target.value)}>{etapes.filter(([value]) => ["gagne", "perdu", "reporte"].includes(value)).map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>}{completionDecision === "classer" && motifsPour(completionEtape) && <MotifField key={completionEtape} options={motifsPour(completionEtape)!} label={completionEtape === "perdu" ? "Pourquoi le dossier est-il perdu ?" : "Pourquoi le dossier est-il reporté ?"} />}{completionDecision === "archiver" && <><MotifField options={motifsPour(null, true)!} label="Pourquoi archiver ce dossier ?" /><p className="field-help">Les autres actions ouvertes de ce dossier seront annulées.</p></>}<button className="primary-button" disabled={busy}>Terminer l’action <Check size={18} /></button></form></div></section></div>}
 
     {creation && <div className="sheet-backdrop" onClick={() => setCreation(false)}><section className="sheet" role="dialog" aria-modal="true" aria-label="Nouveau prospect" onClick={(event) => event.stopPropagation()}><div className="sheet-handle" /><div className="sheet-head"><button className="icon-button" onClick={() => setCreation(false)} aria-label="Retour"><ArrowLeft size={20} /></button><span>NOUVEAU PROSPECT</span><button className="icon-button" onClick={() => setCreation(false)} aria-label="Fermer"><X size={20} /></button></div><div className="sheet-body"><ProspectForm contacts={contacts} localites={localites} busy={busy} message={message} onClose={() => setCreation(false)} onSave={creerDossier} onSearchContacts={chercherContacts} manager={manager} agents={agents} /></div></section></div>}
   </div>;

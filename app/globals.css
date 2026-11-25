@@ -874,3 +874,21 @@ h1, h2, h3 { letter-spacing: -.035em; }
 .manager-gestion-equipe[open] > summary svg:last-child { transform: rotate(180deg); }
 .manager-gestion-equipe[open] { padding-bottom: 14px; }
 .manager-gestion-equipe[open] > :not(summary) { margin-left: 14px; margin-right: 14px; }
+
+/* Dossiers endormis : sans contact depuis trop longtemps pour leur étape. */
+.endormis-cta { border-color: #fcd9a0; background: #fffbeb; color: #78350f; }
+.endormis-cta .sans-suite-icone { background: #fef3c7; color: #b45309; }
+.chips button.chip-endormi { display: inline-flex; align-items: center; gap: 5px; border-color: #fcd9a0; color: #92400e; }
+.chips button.chip-endormi.active { background: #b45309; border-color: #b45309; color: white; }
+.endormi-badge { display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px; border-radius: 7px; background: #fef3c7; color: #92400e; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.detail-chips .endormi-badge { font-size: 11px; padding: 5px 8px; border-radius: 8px; }
+
+/* Après l'appel : issue en un toucher, puis la suite. */
+.apres-appel-icone { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; background: #e8f8f6; color: #126861; }
+.issues-appel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0 4px; }
+.issues-appel button { min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: white; color: var(--navy); font-size: 13px; font-weight: 700; text-align: left; }
+.issues-appel button.issue-rdv { border-color: #d9cdf7; }
+.issues-appel button.issue-pas_interesse { border-color: #f0c9ce; color: #a23c49; }
+.issues-appel button.active { background: var(--navy); border-color: var(--navy); color: white; }
+.issues-appel button.issue-pas_interesse.active { background: #a23c49; border-color: #a23c49; }
+.apres-appel .text-action { margin-top: 10px; }
